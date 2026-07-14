@@ -1,131 +1,94 @@
-# Gondola
+<p align="center">
+  <img src="docs/gondola-hero.png" alt="Gondola" width="100%" />
+</p>
 
-**One Venice API key. A self-editing coding agent that also sees, listens, speaks, and creates.**
+<h1 align="center">Gondola</h1>
 
-An agentic **coding harness** that runs in your terminal, like OpenCode, powered entirely by the [Venice AI](https://venice.ai) API and orchestrated by Pi Agent Core. It reads, writes, edits, and runs code in its working directory, so when launched inside its own repository it can **improve and edit itself**. It also keeps the companion's Venice capabilities: live web research, seeing images, generating image, video, music, and speech, plus durable local memory.
+<p align="center">
+  A voice and vision AI companion, and a self-editing terminal coding harness, powered entirely by <a href="https://venice.ai">Venice AI</a> and orchestrated by Pi Agent Core.
+</p>
 
-The same codebase also ships the **web companion** (Gondola): a voice and vision chat with an animated presence, a media tray, an agent workspace, one-click connections, and scheduled automations, for when you want the rich UI.
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" />
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-20%2B-3c873a.svg" />
+  <img alt="Powered by Venice" src="https://img.shields.io/badge/powered%20by-Venice-8d70c8.svg" />
+</p>
 
-## Requirements
+Gondola is two front ends over one agent core. The **web companion** is a voice and vision chat with an animated presence, a media tray, a workspace, and scheduled automations. The **terminal harness** is a coding agent that reads, writes, edits, and runs code in its working directory, so pointed at its own repo it can improve itself. Every model capability runs through Venice; everything you say and do stays local.
 
-- Node.js 20+ (the harness and app use `AbortSignal.any`, `AbortSignal.timeout`, and `structuredClone`)
-- A Venice inference API key
+## Capabilities
 
-## Setup
+| | Capability | What it does |
+| --- | --- | --- |
+| 🎙 | **Voice** | Hands-free mode with automatic end-of-turn detection. Venice speech-to-text, then the agent, then streaming Venice speech, so it starts talking before the full answer is ready. Interrupt anytime. |
+| 👁 | **Vision** | Samples webcam frames to notice gestures, expressions, and things you hold up. Observations arrive as notes in text mode and are only spoken during a voice session. |
+| 🔎 | **Semantic search** | Finds past conversations by meaning, not just titles. Chunk-level Venice embeddings (indexed the way Cursor indexes a codebase) with hybrid lexical re-ranking, so a name mentioned once mid-chat still surfaces. |
+| 🧠 | **Model selection** | Pick any Venice model per conversation from the composer. Automatic fallback if one is unavailable, and reasoning models can stream a collapsible thinking trace. |
+| 🧩 | **Coding sub-agents** | Delegate a self-contained coding or research task to a scoped worker that can read, write, and edit files, with a live task card showing each tool it uses. |
+| 🎨 | **Media creation** | Generate images, video, and music through Venice, collected in an in-app tray. Expensive jobs are quoted first and confirmed. |
+| 💾 | **Memory** | Typed, local long-term memory (bio, preferences, projects, relationships, and more) with optional auto-capture and an approval workflow you control. |
+| ⏰ | **Automations** | Schedule prompts that run on their own cadence with no tab open, delivering the result to the chat or to Telegram. |
+| 🔌 | **Connections** | One-click MCP integrations (Gmail, Calendar, Slack, Notion, GitHub, Linear) or any custom MCP server, plus a Telegram channel. |
+| 📟 | **API X-ray** | A live trace of every Venice call with latency, tokens, and the exact per-request cost derived from the model's list pricing. |
+| 🛠 | **Self-editing harness** | Run it in any project directory and it becomes a general coding agent; run it in this repo and it edits its own source. |
 
-1. Install dependencies:
+## Screenshots
 
-   ```bash
-   npm install --ignore-scripts
-   ```
+The hero above is illustrative. Real UI captures live in [`docs/screenshots/`](docs/screenshots) and are wired into this section as they land. Contributions welcome, see the guide in that folder.
 
-2. Create `.env.local` from `.env.example` and add your Venice inference key:
+## Quick start
 
-   ```bash
-   cp .env.example .env.local
-   ```
-
-   ```bash
-   # .env.local
-   VENICE_API_KEY=your_venice_inference_key
-   ```
-
-   `.env.example` also documents two optional, server-only keys: `VENICE_ADMIN_KEY` (surfaces account balance and usage analytics in the API X-Ray) and `TELEGRAM_BOT_TOKEN` (enables the Telegram channel, which you can also paste directly in the UI).
-
-## Run the terminal harness
-
-```bash
-npm run harness
-```
-
-or, after `npm link`, run the `nova` command from any project directory:
-
-```bash
-nova
-```
-
-You get an interactive agentic loop in the terminal. Type a request in plain language and the harness investigates, edits files, and runs commands to carry it out. It operates on the **current working directory**, so running it inside this repo lets it edit its own source; running it in another project turns it into a general coding agent.
-
-Slash commands: `/help`, `/model [id]`, `/models`, `/tools`, `/cwd`, `/reset`, `/clear`, `/exit`. Press Ctrl-C once to abort the current turn, twice to exit.
-
-### Harness tools
-
-- **Coding:** `read_file`, `write_file`, `edit_file`, `list_dir`, `search_code` (ripgrep), `run_shell`, with real read, write, and execution scoped to the working directory.
-- **Venice capabilities:** `search_web` (grounded live research), `analyze_image` (see an image file), `generate_image` / `generate_video` / `generate_music`, and `speak` (text-to-speech played locally).
-- **Memory:** `memory` and `search_memory` for durable local facts.
-
-The harness streams replies as it works and prints each tool call and result. If the primary Venice model is unavailable it automatically falls back to the next compatible model. Generated media is saved under `.gondola/media/`.
-
-## Run the web companion
+Requirements: **Node.js 20+** and a **Venice inference API key**.
 
 ```bash
-npm run dev
+git clone https://github.com/sabrinaaquino/gondola.git
+cd gondola
+npm install --ignore-scripts
+cp .env.example .env.local   # then add your VENICE_API_KEY
 ```
 
-Open the local address printed in the terminal. Allow microphone or camera access only when you want to use those features. The inference key stays on the server and is never shipped to the browser.
+Run the web companion:
 
-## What it does
+```bash
+npm run dev            # open the local URL it prints
+```
 
-### Voice
-- Hands-free voice mode with automatic end-of-turn detection. Just start talking, pause naturally, and it responds.
-- Press-to-dictate for typing with your voice.
-- Pipeline: Venice speech-to-text → Pi agent → Venice text-to-speech, with streaming replies and progressive audio so it starts speaking before the full answer is generated.
-- Configurable voice, speed, and optional emotion-directed delivery; interrupt at any time.
+Run the terminal harness (operates on the current working directory):
 
-### Vision
-- Optional camera awareness: it samples frames (and short motion clips in talkative mode) to notice gestures, expressions, and things you show it. In text mode these observations arrive as written notes; it only speaks them aloud during a voice session, so turning on the camera never starts it talking on its own.
-- An abstract animated presence reacts and reshapes its form, palette, and motion to match the moment.
-- Ask what it sees, and it inspects the latest frame. It never claims a continuous live feed.
+```bash
+npm run harness        # or `nova` after `npm link`
+```
 
-### Creation
-- Generate images, video, and music through Venice, collected in an in-app media tray.
-- Potentially expensive video and music jobs are quoted first and only run automatically under a configurable spend threshold; above it, the agent asks you to confirm the exact price.
+Slash commands: `/help`, `/model [id]`, `/models`, `/tools`, `/cwd`, `/reset`, `/clear`, `/exit`. Ctrl-C aborts a turn, twice to exit.
 
-### Knowledge and memory
-- Grounded live web search through Venice for current, changing information (news, scores, schedules, prices, weather), with source links.
-- Typed long-term memory (bio, preferences, important notes, projects, relationships, environment, and the agent's own identity) that persists locally, with optional auto-capture and an approval workflow you control from the Memory tab.
-- Long conversations are automatically compacted so context stays coherent over time.
-
-### Reasoning
-- For reasoning-capable models, typed chats can surface the model's live thinking in a collapsible trace (similar to Cursor or ChatGPT), so you can watch how it works through a request.
-- Voice, vision, and background turns skip the trace to stay fast.
-
-### Workspace
-- **Agents vs chats:** a regular chat uses your shared personal memory. An agent is a separate, reusable persona with its own name, description, instructions, skills, and MCP servers, plus an optional isolated memory so it only sees its own private notes (with isolation off it still reads your personal memory, so it knows who you are).
-- Revisit or delete past chats from the history, and switch the conversation model from the picker (staff, beta, and offline models are hidden).
-- **Connections:** link Telegram (message your agent from your phone, running through the same queue and memory as the browser) and one-click MCP integrations (Gmail, Google Calendar, Slack, Notion, GitHub, Linear) or any custom HTTP/stdio MCP server.
-- **Automations:** schedule prompts that run on their own cadence, even with no tab open, and deliver the result to the conversation or to Telegram.
-
-## Why Pi is here
-
-Pi Agent Core is the orchestration harness. It manages the conversation loop, streaming events, tool calls, memory, compaction, and sub-agents. It does not replace Venice. Every model capability, including chat, vision, transcription, speech, web search, image, video, and music, goes through the Venice API.
+`.env.example` documents two optional, server-only keys: `VENICE_ADMIN_KEY` (surfaces balance and usage analytics in the API X-ray) and `TELEGRAM_BOT_TOKEN` (enables the Telegram channel, which you can also paste in the UI).
 
 ## Architecture
 
-Two front ends share one Venice + Pi core:
+```mermaid
+flowchart LR
+  Web["Web companion<br/>voice · vision · media · workspace"] --> Core
+  CLI["Terminal harness<br/>self-editing coding agent"] --> Core
+  TG["Telegram channel"] --> Core
+  Core["Pi Agent Core<br/>loop · tools · sub-agents · memory · compaction"] --> Venice["Venice API<br/>chat · vision · speech · search · image/video/music · embeddings"]
+  Core --> Local[".gondola/<br/>chats · memory · transcripts · vectors · skills"]
+```
 
-- **Terminal harness** (`src/cli/`, launched by `bin/nova.mjs`): a Pi `Agent` loop over Pi's `NodeExecutionEnv`, which provides the sandboxed working-directory filesystem and shell that the coding tools build on. It runs directly on Node via `tsx`, with no server or browser.
-- **Web companion** (`src/app/`): the browser handles the UI, webcam/mic capture, and audio playback; local Next.js API routes keep the Venice key private and stream agent events back as newline-delimited JSON.
-- Both reuse the same libraries in `src/lib/` (Venice client, memory, model/stream setup, skills, MCP).
-- Conversations, agents, memory, skills, connections, automations, and generated media persist locally under `.gondola/` (git-ignored).
+- **Web companion** (`src/app/`): the browser handles UI, webcam/mic, and audio; local Next.js API routes keep the Venice key private and stream agent events as newline-delimited JSON.
+- **Terminal harness** (`src/cli/`, launched by `bin/nova.mjs`): a Pi `Agent` loop over Pi's sandboxed working-directory filesystem and shell, running on Node via `tsx`.
+- Both share `src/lib/` (Venice client, memory, model and stream setup, skills, MCP, sub-agents, search, compaction).
+- **Pi Agent Core** orchestrates the loop, tools, memory, and compaction. It does not replace Venice; every capability goes through the Venice API.
 
-## Reliability
+## Privacy and safety
 
-- Web search is grounded, generic, and time-bounded, with no hardcoded topics or endpoints.
-- API routes validate input and cap request/upload sizes (messages, frames, motion clips, audio).
-- Closing a request or tab aborts the in-flight Venice work so nothing keeps running or spending in the background.
-- The webcam is captured on demand rather than recorded continuously, reducing CPU and cost.
-- Object URLs, audio buffers, in-memory caches, and agent sessions are bounded and cleaned up.
-- Malformed stream lines are skipped instead of ending a turn, and React error boundaries keep a single failure from taking down the app.
+- Conversations, agents, memory, skills, connections, automations, and generated media persist locally under `.gondola/` (git-ignored). Your inference key stays on the server and never ships to the browser.
+- The harness runs shell commands and edits files autonomously; destructive actions require confirmation, and it is instructed never to touch secrets. Run it on code under version control and review its diffs.
+- This is a local, single-user tool, not a hardened multi-tenant deployment.
 
-## Practical limits and safety
+## Contributing
 
-- The harness runs shell commands and edits files in its working directory autonomously. It is instructed to avoid destructive actions and never touch secrets, but you should run it on code you have under version control and review its diffs.
-- Vision is sampled rather than continuous video streaming, which keeps it responsive and inexpensive.
-- Voice uses a transcription → agent → speech pipeline rather than full-duplex realtime audio.
-- Video and music jobs are asynchronous and can consume meaningful Venice credits, so the agent quotes first.
-- This is a local, single-user tool, not a production security or multi-tenant deployment.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [Code of Conduct](./CODE_OF_CONDUCT.md). The product and implementation plan lives in [PLAN.md](./PLAN.md).
 
-## Roadmap
+## License
 
-The Telegram channel and scheduled automations described above are now wired into the web companion, backed by `src/lib/gateway.ts`, `scheduler.ts`, and `channels-store.ts`. See [PLAN.md](./PLAN.md) for the product and implementation plan.
+[MIT](./LICENSE) © Sabrina Aquino
