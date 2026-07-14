@@ -87,7 +87,7 @@ flowchart LR
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [Code of Conduct](./CODE_OF_CONDUCT.md). The product and implementation plan lives in [PLAN.md](./PLAN.md).
+Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 
