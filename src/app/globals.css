@@ -7960,33 +7960,55 @@ input:focus-visible {
   .app-shell.sidebar-collapsed .conversation-header { padding-left: 52px !important; }
 }
 
-/* ── Clearer chat attribution ─────────────────────────────────────────────
-   Make it obvious what you wrote vs. what Gondola replied: show the sender
-   label again (it was visually hidden), and give the user's messages a distinct
-   right-aligned accent bubble instead of the near-invisible dark one. */
+/* ── Message attribution by bubble (no text labels) ────────────────────────
+   No "You"/name labels: the distinction is purely the bubble. Your messages are
+   a right-aligned, clearly-lighter bubble; Gondola's are left-aligned full-width
+   plain text. Keep the sender label hidden (screen-reader only). */
 .message-meta {
-  position: static;
-  width: auto;
-  height: auto;
-  overflow: visible;
-  clip: auto;
-  clip-path: none;
-  display: flex;
-  align-items: center;
-  margin-bottom: 5px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .01em;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-.message-meta .message-avatar { display: none; }
-.message-user .message-meta { justify-content: flex-end; }
 .message-user > .message-content {
-  max-width: min(80%, 620px);
-  padding: 10px 14px;
-  border: 1px solid rgba(184, 207, 232, .24);
-  border-radius: 16px 16px 5px 16px;
-  background: rgba(184, 207, 232, .10);
-  color: #eef2f7;
+  width: fit-content;
+  max-width: min(82%, 600px);
+  padding: 11px 15px;
+  border: 1px solid rgba(160, 190, 235, .30);
+  border-radius: 16px 16px 6px 16px;
+  background: #1f2836;
+  color: #eef3fa;
 }
-.message-assistant > .message-content { width: 100%; }
+.message-assistant > .message-content {
+  width: 100%;
+  color: #d7d8da;
+}
+
+/* ── Composer: grow with a few lines, then scroll with a subtle bar ─────────
+   The input auto-grows with what you type (JS caps the height), and once it
+   reaches the cap it scrolls with a thin, muted scrollbar instead of the chunky
+   default. box-sizing keeps the auto-grow height math correct. */
+.composer textarea,
+.workspace.entity-hidden .composer textarea {
+  box-sizing: border-box;
+  min-height: 30px;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(225, 232, 242, .18) transparent;
+}
+.composer textarea::-webkit-scrollbar { width: 7px; }
+.composer textarea::-webkit-scrollbar-track { background: transparent; }
+.composer textarea::-webkit-scrollbar-thumb {
+  background: rgba(225, 232, 242, .14);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.composer textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(225, 232, 242, .3);
+  background-clip: padding-box;
+}
