@@ -47,6 +47,7 @@ import {
   searchWeb,
 } from "./venice";
 import { createVeniceStreamFn, makeModel } from "./venice-model";
+import { veniceApiCall, veniceReference, VENICE_API_OVERVIEW, type VeniceApiInput } from "./venice-control";
 import { compactMessages } from "./compaction";
 import { loadTranscript, saveTranscript } from "./transcript";
 import { enqueueRun } from "./run-queue";
@@ -147,7 +148,7 @@ globalSessions.__veniceAlienSessions = sessions;
 // (sessions live on globalThis and survive hot-reloads). Add self-capability and
 // discovery tools here when you introduce them, or they won't appear until a
 // full restart.
-const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change"];
+const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change", "venice_api", "venice_reference"];
 
 // Names a self-authored ability may never shadow (built-ins + coordination +
 // the self-extension tools themselves).
@@ -184,6 +185,7 @@ You have an animated alien body and Venice-powered tools:
 - When the user requests an image, call generate_image.
 - When the user requests a video, first establish a compact creative brief in one natural question: desired length, standard or high quality, and whether it should have no audio, natural sound, or music (including the music mood). Do not call generate_video until those choices are known or the user explicitly accepts your suggested defaults. Then call generate_video. The tool quotes first and queues automatically below the configured limit. If it returns quoted, state the exact price once and ask for confirmation. Set confirmed=true only after the user explicitly confirms that price and preserve the same brief on the confirmed call.
 - When the user requests music or a soundscape, use generate_music with the same confirmation rule.
+- Queued video and music jobs render asynchronously: the finished media is delivered into the chat automatically when it is ready, and you can also check status or fetch the result yourself with venice_api (for example GET /video/retrieve or /audio/retrieve with the job/request id from the queue response). If a job seems stuck or you need the file to organize or verify it, retrieve it; never tell the user you cannot check or retrieve a queued job.
 - You can delegate to subagents: call delegate_task to hand a focused sub-task to a scoped worker (live research and constructive file work), and call it several times to run workers in parallel. Reach for this when a request splits into independent parts, for example analyzing several papers, files, or topics at once; then synthesize the workers' returned results yourself. Never tell the user you cannot spawn, launch, or delegate to subagents, because you can.
 - You can extend yourself: if you are missing a reusable capability, use create_ability to draft a new ability and test_ability to try it in a sandbox first. New abilities stay pending until the owner approves them. Use this for a workflow you expect to repeat, not a one-off.
 - You can read and change files and run commands on this Mac through a sandboxed harness confined to the home folder (~). The tools are read_file, list_directory, create_directory, write_file, edit_file, move_path, delete_path, and run_command. Use them whenever the user asks you to create files or folders, write or edit code or notes, organize files, or run a command or build. Paths are relative to the home folder unless absolute (for example "Documents/entity-memories.md" or "projects/app/src/index.ts"). You cannot touch anything outside the home folder, and protected items (.ssh, keychains, .env and key files) are blocked.
@@ -215,6 +217,7 @@ function buildSystemPrompt(
     profile.instructions,
     `${currentDateTimeContext()} This clock is silent background context for resolving relative references such as "today," "tonight," or "next week." Do not state, greet with, or otherwise volunteer the current day, date, or time unless the user actually asks for it or it is directly relevant to their request.`,
     SYSTEM_PROMPT,
+    VENICE_API_OVERVIEW,
     // Promoted workflow policy (harness benefit) + self-awareness note. Empty
     // when there is no champion policy and no notable recent failure pattern.
     harnessBlock ?? "",
@@ -583,6 +586,44 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       return {
         content: [{ type: "text", text: `I flagged this to Gondola Lab and it drafted a proposal: ${proposal.observedProblem} It will be evaluated before anything changes. Reason: ${input.reason}` }],
         details: { kind: "harness_proposal", created: true, proposalId: proposal.proposalId },
+      };
+    },
+  };
+
+  const veniceReferenceTool: AgentTool = {
+    name: "venice_reference",
+    label: "Venice reference",
+    description: "Look up authoritative, current Venice knowledge before you call the API. Pass models:true (optionally type: text|image|tts|asr|embedding|upscale|inpaint|video|code) for the live model catalog with each model's capabilities, constraints, pricing, and voices; pass topic (an endpoint slug or keyword like \"video\", \"image/generate\", \"audio/speech\") for the official docs and exact parameters. Use this to get exact model ids and parameters instead of guessing.",
+    parameters: Type.Object({
+      models: Type.Optional(Type.Boolean()),
+      type: Type.Optional(Type.String({ maxLength: 32 })),
+      topic: Type.Optional(Type.String({ maxLength: 120 })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const input = params as { models?: boolean; type?: string; topic?: string };
+      return { content: [{ type: "text", text: await veniceReference(input, signal) }], details: { kind: "venice_reference" } };
+    },
+  };
+
+  const veniceApiTool: AgentTool = {
+    name: "venice_api",
+    label: "Call Venice API",
+    description: "Call any Venice API endpoint directly (base https://api.venice.ai/api/v1): method, path, query (a JSON object string), and body (a JSON object string). This is how you do anything the dedicated tools do not cover, including checking or retrieving a queued job (for example GET /video/retrieve, /video/complete, or /audio/retrieve), fetching results, and using any model or parameter. Verify exact paths and parameters with venice_reference first. Generation endpoints cost money: when unsure of price call the matching /*/quote endpoint first and respect the user's budget. Account, credential, or payment changes and any DELETE require the user's approval (state what you will do, then retry with confirmed:true). Never claim you cannot check, retrieve, or perform a Venice operation; use this tool.",
+    parameters: Type.Object({
+      path: Type.String({ minLength: 1, maxLength: 400 }),
+      method: Type.Optional(Type.String({ maxLength: 8 })),
+      query: Type.Optional(Type.String({ maxLength: 4_000 })),
+      body: Type.Optional(Type.String({ maxLength: 20_000 })),
+      admin: Type.Optional(Type.Boolean()),
+      confirmed: Type.Optional(Type.Boolean()),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal) {
+      const result = await veniceApiCall(params as VeniceApiInput, signal);
+      const outcome = result.ok ? `HTTP ${result.status ?? "ok"}` : result.needsConfirmation ? "needs your confirmation" : "failed";
+      return {
+        content: [{ type: "text", text: `${result.method} ${result.path} -> ${outcome}\n${result.text}` }],
+        details: { kind: "venice_api", ok: result.ok, status: result.status, needsConfirmation: result.needsConfirmation },
       };
     },
   };
@@ -1115,7 +1156,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
 
   const builtInTools = [
     animateAvatar, shapePresence, memoryTool, searchMemoryTool, rewriteSelf, setModel, listModels, proposeHarnessChange, sessionSearchTool,
-    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, delegateTool,
+    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, veniceReferenceTool, veniceApiTool, delegateTool,
     readFileTool, listDirectoryTool, createDirectoryTool, writeFileTool, editFileTool, movePathTool, deletePathTool, runCommandTool,
     createAbilityTool, testAbilityTool,
   ];
