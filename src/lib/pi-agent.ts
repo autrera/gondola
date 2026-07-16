@@ -52,6 +52,8 @@ import {
   getMediaTask,
   getMediaTaskByProviderId,
   listMediaTasks,
+  resumePendingMediaTasks,
+  selectResumableTasks,
   toTaskStatusView,
 } from "./media-tasks";
 import { buildRuntimeSnapshot } from "./runtime-snapshot";
@@ -64,12 +66,14 @@ import {
 } from "./runtime-state";
 import {
   addExecutionCheckpoint,
+  getExecutionState,
   setExecutionPlan,
   STEP_STATUSES,
   updateExecutionStep,
   type StepStatus,
 } from "./execution-state";
 import { markFailureRecovered, recordFailure } from "./failure-journal";
+import { isToolAutoApproved, recordApprovalDecision, recordApprovalRequest } from "./approval-store";
 import { createVeniceStreamFn, makeModel } from "./venice-model";
 import { veniceApiCall, veniceReference, VENICE_API_OVERVIEW, type VeniceApiInput } from "./venice-control";
 import { compactMessages } from "./compaction";
@@ -191,13 +195,21 @@ const RESERVED_TOOL_NAMES = [
 // what lets the agent (not only the browser) list, await, and deliver a job it
 // started -- including jobs queued by a worker or via the raw API. Returns the
 // task id so the tool result can carry it back for a later media_task_await.
-async function recordMediaTaskFromDetails(details: Record<string, unknown>): Promise<string | undefined> {
+async function recordMediaTaskFromDetails(
+  details: Record<string, unknown>,
+  context: { conversationId?: string; sourceAssetIds?: string[] } = {},
+): Promise<string | undefined> {
   if (details.status !== "queued") return undefined;
   const queueId = typeof details.queueId === "string" ? details.queueId : undefined;
   const model = typeof details.model === "string" ? details.model : undefined;
   const kind = details.kind === "video" || details.kind === "music" ? details.kind : undefined;
   if (!queueId || !model || !kind) return undefined;
   try {
+    // Tie the job to its conversation + active goal so it can never become
+    // detached from the agent's runtime state (the failure this hardening fixes).
+    const goal = context.conversationId
+      ? (await getExecutionState(context.conversationId).catch(() => undefined))?.goal ?? undefined
+      : undefined;
     const task = await createMediaTask({
       providerTaskId: queueId,
       kind,
@@ -206,11 +218,30 @@ async function recordMediaTaskFromDetails(details: Record<string, unknown>): Pro
       model,
       downloadUrl: typeof details.downloadUrl === "string" ? details.downloadUrl : undefined,
       estimatedCostUsd: typeof details.quote === "number" ? details.quote : undefined,
+      conversationId: context.conversationId,
+      goal,
+      sourceAssetIds: context.sourceAssetIds,
     });
     return task.id;
   } catch {
     return undefined;
   }
+}
+
+// Gate a destructive tool call: proceed on explicit confirmation or an owner
+// session grant, otherwise record a pending approval. Every outcome is
+// journalled so the human-in-the-loop boundary is auditable via the runtime.
+async function gateApproval(runtime: RuntimeContext, tool: string, summary: string, confirmed: boolean | undefined): Promise<boolean> {
+  if (confirmed === true) {
+    void recordApprovalDecision({ conversationId: runtime.sessionId, tool, summary, status: "approved" }).catch(() => undefined);
+    return true;
+  }
+  if (await isToolAutoApproved(runtime.sessionId, tool).catch(() => false)) {
+    void recordApprovalDecision({ conversationId: runtime.sessionId, tool, summary, status: "approved", decidedBy: "session-grant" }).catch(() => undefined);
+    return true;
+  }
+  void recordApprovalRequest({ conversationId: runtime.sessionId, tool, summary }).catch(() => undefined);
+  return false;
 }
 
 const SYSTEM_PROMPT = `You are an expressive AI companion in a polished voice and vision interface.
@@ -835,7 +866,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         input.confirmed === true,
         signal,
       );
-      const taskId = await recordMediaTaskFromDetails(details);
+      const taskId = await recordMediaTaskFromDetails(details, { conversationId: runtime.sessionId });
       const videoText = taskId
         ? `Video queued (job ${taskId}). It renders asynchronously and will appear inline in this chat; if it does not, call media_task_await with this taskId to fetch and deliver it. Never curl or save to disk to show a video, and do not claim it is delivered until it renders or media_task_await confirms it.`
         : String(details.message ?? `Video job ${details.status}.`);
@@ -863,7 +894,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         input.confirmed === true,
         signal,
       );
-      const taskId = await recordMediaTaskFromDetails(details);
+      const taskId = await recordMediaTaskFromDetails(details, { conversationId: runtime.sessionId });
       const musicText = taskId
         ? `Track queued (job ${taskId}). It renders asynchronously and will appear inline in this chat; if it does not, call media_task_await with this taskId to fetch and deliver it. Never curl or save to disk to play it, and do not claim it is delivered until it renders or media_task_await confirms it.`
         : String(details.message ?? `Music job ${details.status}.`);
@@ -1023,7 +1054,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       if (runtime.subAgentDepth > 0 && input.overwrite) {
         return { content: [{ type: "text", text: "As a worker sub-agent I can create new files and edit existing ones, but I can't overwrite a whole file. Use edit_file for changes, or leave the overwrite to the primary assistant." }], details: { kind: "fs_write", ok: false, blocked: "subagent_overwrite", path: input.path } };
       }
-      if (input.overwrite && input.confirmed !== true) {
+      if (input.overwrite && !(await gateApproval(runtime, "write_file", `overwrite ${input.path}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Overwriting ${input.path} will replace its contents (a backup is kept). Confirm and I'll proceed.` }], details: { kind: "fs_write", ok: false, needsConfirmation: true, path: input.path } };
       }
       try {
@@ -1076,7 +1107,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       if (runtime.subAgentDepth > 0 && input.overwrite) {
         return { content: [{ type: "text", text: "As a worker sub-agent I can't overwrite an existing destination. Leave that to the primary assistant." }], details: { kind: "fs_move", ok: false, blocked: "subagent_overwrite" } };
       }
-      if (input.overwrite && input.confirmed !== true) {
+      if (input.overwrite && !(await gateApproval(runtime, "move_path", `move onto ${input.to}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Moving onto ${input.to} will replace it (the old one goes to the trash). Confirm and I'll proceed.` }], details: { kind: "fs_move", ok: false, needsConfirmation: true } };
       }
       try {
@@ -1101,7 +1132,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
     async execute(_toolCallId, params) {
       if (!runtime.settings.fileAccess) return fsDisabled("fs_delete");
       const input = params as { path: string; confirmed?: boolean };
-      if (input.confirmed !== true) {
+      if (!(await gateApproval(runtime, "delete_path", `delete ${input.path}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Deleting ${input.path} will move it to the recoverable trash. Confirm and I'll proceed.` }], details: { kind: "fs_delete", ok: false, needsConfirmation: true, path: input.path } };
       }
       try {
@@ -1116,7 +1147,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const runCommandTool: AgentTool = {
     name: "run_command",
     label: "Run a command",
-    description: "Run a terminal command on this Mac (for example npm, git, node, or a build script), returning its output. This is powerful, so it always requires the user's explicit confirmation (confirmed:true). Show the exact command and wait for a yes before running. Commands run with the user's own permissions; sudo and destructive disk operations are blocked.",
+    description: "Run a terminal command on this Mac (for example npm, git, node, or a build script), returning its output. This is powerful, so it always requires the user's explicit confirmation (confirmed:true). Show the exact command and wait for a yes before running. Commands run inside an OS sandbox: filesystem writes are confined to the workspace and temp, credential files are unreadable, and secrets are scrubbed from the environment; sudo and destructive disk operations are blocked.",
     parameters: Type.Object({
       command: Type.String({ minLength: 1, maxLength: 4_000, description: "The exact shell command to run." }),
       cwd: Type.Optional(Type.String({ maxLength: 1_024, description: "Working directory; defaults to the home folder." })),
@@ -1128,18 +1159,21 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         return { content: [{ type: "text", text: "Running terminal commands is turned off in settings, so I can't do that right now." }], details: { kind: "fs_command", enabled: false } };
       }
       const input = params as { command: string; cwd?: string; confirmed?: boolean };
-      if (input.confirmed !== true) {
+      if (!(await gateApproval(runtime, "run_command", `run: ${input.command}`, input.confirmed))) {
         return { content: [{ type: "text", text: `About to run: ${input.command}${input.cwd ? ` (in ${input.cwd})` : ""}. Confirm and I'll run it.` }], details: { kind: "fs_command", ok: false, needsConfirmation: true, command: input.command } };
       }
       try {
         const result = await runCommand(input.command, input.cwd);
         const status = result.timedOut ? "timed out" : `exited with code ${result.exitCode}`;
+        const sandboxLine = result.sandboxed
+          ? "sandboxed: writes confined to the workspace, secrets scrubbed"
+          : `NOT sandboxed: ${result.sandboxNote ?? "no OS sandbox available"}`;
         const parts = [
-          `$ ${result.command}  (${status})`,
+          `$ ${result.command}  (${status}) [${sandboxLine}]`,
           result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : "",
           result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : "",
         ].filter(Boolean);
-        return { content: [{ type: "text", text: parts.join("\n\n") || "(no output)" }], details: { kind: "fs_command", ok: true, exitCode: result.exitCode, timedOut: result.timedOut } };
+        return { content: [{ type: "text", text: parts.join("\n\n") || "(no output)" }], details: { kind: "fs_command", ok: true, exitCode: result.exitCode, timedOut: result.timedOut, sandboxed: result.sandboxed } };
       } catch (error) {
         return fsError(error, "fs_command");
       }
@@ -1705,6 +1739,10 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
   session.runtime.currentMessage = input.message;
   session.runtime.webSearchCompleted = false;
   session.runtime.turnTrace = { startedAt: Date.now(), toolCalls: [] };
+  // Supervisor-safe resume: on every real turn, re-drive any media jobs for this
+  // conversation that were left queued/running (detached after a crash or a turn
+  // that ended early), so a queued job can never orphan from runtime state.
+  if (!input.hidden) void resumePendingMediaTasks({ conversationId: input.sessionId }).catch(() => undefined);
   // Harness benefit: a promoted (champion) Lab config must actually change what
   // the acting agent does. Load it here and fold its workflow policy into the
   // live system prompt (rebuilt every turn), plus a short self-awareness note
@@ -1994,6 +2032,17 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         return text ? [{ role: message.role as "user" | "assistant", text }] : [];
       })
       .slice(-6);
+    // Resume context: media jobs still queued for this conversation, and the
+    // last checkpoint. These let the supervisor resume polling or offer to
+    // continue from a checkpoint instead of only explaining what broke.
+    const resumableTasks = selectResumableTasks(
+      await listMediaTasks({ limit: 50 }).catch(() => []),
+      { conversationId: input.sessionId },
+    );
+    const execForRecovery = await getExecutionState(input.sessionId).catch(() => null);
+    const lastCheckpointEntry = execForRecovery?.checkpoints?.length
+      ? execForRecovery.checkpoints[execForRecovery.checkpoints.length - 1]
+      : null;
     const recovery = await runSupervisorRecovery({
       message: input.message,
       lastError,
@@ -2001,6 +2050,10 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       emit: session.runtime.emit,
       signal: input.signal,
       context: recentContext,
+      pendingMedia: resumableTasks.length,
+      lastCheckpoint: lastCheckpointEntry
+        ? { label: lastCheckpointEntry.label, createdAt: lastCheckpointEntry.createdAt }
+        : null,
     });
     // Record the failed turn WITH the supervisor's diagnosis: repeated failure
     // categories are exactly what the Lab's reviewer aggregates to propose a
@@ -2024,6 +2077,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         recoveredBySupervisor: recovery.recovered,
       });
     })().catch(() => undefined);
+    // Durable failure checkpoint so the next turn is resume-aware (Phase 3).
+    await addExecutionCheckpoint(input.sessionId, `turn:failed (${recovery.category})`, {
+      strategy: recovery.strategy,
+      recovered: recovery.recovered,
+      pendingMedia: resumableTasks.length,
+    }).catch(() => undefined);
     if (recovery.text) {
       await appendSessionRecord({
         sessionId: input.sessionId,

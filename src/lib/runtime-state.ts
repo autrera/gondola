@@ -60,6 +60,9 @@ export interface RuntimeJob {
   assetId?: string;
   etaSeconds?: number;
   costUsd?: number;
+  goal?: string;
+  sourceAssetIds?: string[];
+  retrievalAttempts?: number;
 }
 
 export interface RuntimeAsset {
@@ -151,6 +154,11 @@ export interface RuntimeEnvironment {
   availableCommands: string[];
 }
 
+export interface RuntimeApprovals {
+  pending: { id: string; tool: string; summary: string; createdAt: string }[];
+  sessionGrants: { tool: string; grantedAt: string }[];
+}
+
 export interface RuntimeSnapshot {
   generatedAt: string;
   identity: RuntimeIdentity;
@@ -167,6 +175,7 @@ export interface RuntimeSnapshot {
   failures: RuntimeFailure[];
   checkpoints: RuntimeCheckpoint[];
   lab: RuntimeLab;
+  approvals: RuntimeApprovals;
   environment: RuntimeEnvironment;
 }
 
@@ -186,12 +195,13 @@ export type RuntimeSection =
   | "failures"
   | "checkpoints"
   | "lab"
+  | "approvals"
   | "environment";
 
 export const RUNTIME_SECTIONS: RuntimeSection[] = [
   "identity", "objective", "plan", "execution", "capabilities", "jobs", "assets",
   "models", "memory", "permissions", "budget", "supervisor", "failures",
-  "checkpoints", "lab", "environment",
+  "checkpoints", "lab", "approvals", "environment",
 ];
 
 // ── Selection (runtime.status(section)) ───────────────────────────────────────
@@ -214,6 +224,7 @@ export function selectRuntimeSection(snapshot: RuntimeSnapshot, section?: Runtim
     case "failures": return snapshot.failures;
     case "checkpoints": return snapshot.checkpoints;
     case "lab": return snapshot.lab;
+    case "approvals": return snapshot.approvals;
     case "environment": return snapshot.environment;
     default: return snapshot;
   }

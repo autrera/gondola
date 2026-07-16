@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diagnoseFailure, explanationFor } from "./supervisor";
+import { chooseRecoveryStrategy, diagnoseFailure, explanationFor } from "./supervisor";
 
 test("diagnoseFailure classifies each common failure signature", () => {
   assert.equal(diagnoseFailure("Request timed out after 120000ms").category, "timeout");
@@ -28,4 +28,28 @@ test("explanationFor mentions the fallback attempt only when a retry happened", 
   assert.ok(!explanationFor(diagnosis, false).includes("lighter fallback"));
   // Always ends with the actionable suggestion.
   assert.ok(explanationFor(diagnosis, false).includes(diagnosis.suggestion));
+});
+
+test("chooseRecoveryStrategy resumes media when jobs are still queued on a transient failure", () => {
+  const diagnosis = diagnoseFailure("timed out");
+  assert.equal(chooseRecoveryStrategy(diagnosis, { canRetry: true, pendingMedia: 2 }), "resume_media");
+  assert.equal(chooseRecoveryStrategy(diagnosis, { canRetry: false, pendingMedia: 1 }), "resume_media");
+});
+
+test("chooseRecoveryStrategy retries fast for transient failures with no side effects", () => {
+  assert.equal(chooseRecoveryStrategy(diagnoseFailure("timed out"), { canRetry: true }), "retry_fast");
+  assert.equal(chooseRecoveryStrategy(diagnoseFailure("503 service unavailable"), { canRetry: true, pendingMedia: 0 }), "retry_fast");
+});
+
+test("chooseRecoveryStrategy offers a resume point when a tool already ran and a checkpoint exists", () => {
+  const diagnosis = diagnoseFailure("something broke");
+  const checkpoint = { label: "queued video", createdAt: "2026-07-16T00:00:00.000Z" };
+  assert.equal(chooseRecoveryStrategy(diagnosis, { canRetry: false, lastCheckpoint: checkpoint }), "resume_point");
+  assert.equal(chooseRecoveryStrategy(diagnosis, { canRetry: false, lastCheckpoint: null }), "explain");
+});
+
+test("chooseRecoveryStrategy waits on rate limits and does not retry auth or bad requests", () => {
+  assert.equal(chooseRecoveryStrategy(diagnoseFailure("429 rate limit"), { canRetry: true }), "wait_retry");
+  assert.equal(chooseRecoveryStrategy(diagnoseFailure("401 invalid api key"), { canRetry: true }), "explain");
+  assert.equal(chooseRecoveryStrategy(diagnoseFailure("400 bad request"), { canRetry: true, pendingMedia: 3 }), "explain");
 });

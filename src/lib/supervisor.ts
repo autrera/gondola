@@ -63,6 +63,43 @@ export function explanationFor(diagnosis: FailureDiagnosis, triedRecovery: boole
   return `${capitalized}.${tried} ${diagnosis.suggestion}`;
 }
 
+export type RecoveryStrategy =
+  | "retry_fast"
+  | "resume_media"
+  | "resume_point"
+  | "wait_retry"
+  | "explain";
+
+export interface RecoveryContext {
+  /** False when a tool already ran this turn (no safe replay). */
+  canRetry: boolean;
+  /** Count of media jobs still queued/running for this conversation. */
+  pendingMedia?: number;
+  /** The most recent execution checkpoint, if any. */
+  lastCheckpoint?: { label: string; createdAt: string } | null;
+}
+
+/**
+ * Pick a bounded recovery strategy from the diagnosis and what state survives.
+ * Detached async media is the specific failure this subsystem targets: when jobs
+ * are still queued, resume polling instead of retrying the turn. When a tool has
+ * already run (no safe replay) but a checkpoint exists, offer to resume from it.
+ */
+export function chooseRecoveryStrategy(diagnosis: FailureDiagnosis, context: RecoveryContext): RecoveryStrategy {
+  const transient = diagnosis.category === "timeout"
+    || diagnosis.category === "network"
+    || diagnosis.category === "server"
+    || diagnosis.category === "empty"
+    || diagnosis.category === "generic";
+  if ((context.pendingMedia ?? 0) > 0 && transient) return "resume_media";
+  if (diagnosis.category === "rate_limit") return "wait_retry";
+  if (diagnosis.category === "auth" || diagnosis.category === "bad_request") {
+    return context.lastCheckpoint ? "resume_point" : "explain";
+  }
+  if (context.canRetry) return "retry_fast";
+  return context.lastCheckpoint ? "resume_point" : "explain";
+}
+
 type Emit = (event: Record<string, unknown>) => void;
 
 export interface SupervisorRecoveryInput {
@@ -77,6 +114,10 @@ export interface SupervisorRecoveryInput {
   signal?: AbortSignal;
   /** Recent conversation turns (text only), most recent last. */
   context?: Array<{ role: "user" | "assistant"; text: string }>;
+  /** Count of media jobs still queued/running (drives resume_media). */
+  pendingMedia?: number;
+  /** Most recent execution checkpoint, for resume-aware explanations. */
+  lastCheckpoint?: { label: string; createdAt: string } | null;
 }
 
 export interface SupervisorRecoveryResult {
@@ -84,6 +125,8 @@ export interface SupervisorRecoveryResult {
   recovered: boolean;
   /** The diagnosed failure category, so the caller can record it for the Lab. */
   category: FailureCategory;
+  /** The recovery strategy that was chosen, for the Lab / runtime record. */
+  strategy: RecoveryStrategy;
 }
 
 // A quick, non-reasoning model for the recovery attempt. Deliberately a
@@ -116,29 +159,54 @@ async function attemptStrippedRecovery(input: SupervisorRecoveryInput): Promise<
   return response.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
+/** Compose the recovery reply for a non-retry strategy (resume-aware). */
+function recoveryMessage(diagnosis: FailureDiagnosis, strategy: RecoveryStrategy, input: SupervisorRecoveryInput): string {
+  const base = explanationFor(diagnosis, input.canRetry);
+  if (strategy === "resume_media") {
+    const count = input.pendingMedia ?? 0;
+    const jobs = count === 1 ? "job is" : "jobs are";
+    const reason = diagnosis.reason.charAt(0).toUpperCase() + diagnosis.reason.slice(1);
+    return `${reason}, but your ${count} queued ${jobs} still tracked and I'm re-checking them - they'll land here as they finish. ${diagnosis.suggestion}`;
+  }
+  if (strategy === "resume_point" && input.lastCheckpoint) {
+    return `${base} I got as far as "${input.lastCheckpoint.label}", so I can pick up from there - just say continue.`;
+  }
+  return base;
+}
+
 /**
- * Recover a failed turn: try one stripped fast completion, and if that cannot
- * answer, stream a plain-language explanation of what broke. Always emits
- * something so the chat never dead-ends, and never throws.
+ * Recover a failed turn. Chooses a bounded strategy from the diagnosis and what
+ * state survives: a stripped fast completion for transient model failures, a
+ * resume-polling note when media jobs are still queued, or a resume-from-
+ * checkpoint offer when a tool already ran. Always emits something so the chat
+ * never dead-ends, and never throws, spends, or replays a tool turn.
  */
 export async function runSupervisorRecovery(input: SupervisorRecoveryInput): Promise<SupervisorRecoveryResult> {
   const diagnosis = diagnoseFailure(input.lastError);
-  if (input.canRetry && !input.signal?.aborted) {
+  const strategy = chooseRecoveryStrategy(diagnosis, {
+    canRetry: input.canRetry,
+    pendingMedia: input.pendingMedia,
+    lastCheckpoint: input.lastCheckpoint,
+  });
+  if (input.signal?.aborted) return { text: "", recovered: false, category: diagnosis.category, strategy };
+
+  if (strategy === "retry_fast") {
     try {
       const answer = await attemptStrippedRecovery(input);
       if (answer && !input.signal?.aborted) {
         input.emit({ type: "text_delta", delta: RECOVERY_LEAD_IN });
         input.emit({ type: "text_delta", delta: answer });
         input.emit({ type: "recovery", recovered: true, category: diagnosis.category });
-        return { text: `${RECOVERY_LEAD_IN}${answer}`, recovered: true, category: diagnosis.category };
+        return { text: `${RECOVERY_LEAD_IN}${answer}`, recovered: true, category: diagnosis.category, strategy };
       }
     } catch {
       // Recovery itself failed; fall through to the plain-language explanation.
     }
   }
-  if (input.signal?.aborted) return { text: "", recovered: false, category: diagnosis.category };
-  const explanation = explanationFor(diagnosis, input.canRetry);
-  input.emit({ type: "text_delta", delta: explanation });
+
+  if (input.signal?.aborted) return { text: "", recovered: false, category: diagnosis.category, strategy };
+  const message = recoveryMessage(diagnosis, strategy, input);
+  input.emit({ type: "text_delta", delta: message });
   input.emit({ type: "recovery", recovered: false, category: diagnosis.category });
-  return { text: explanation, recovered: false, category: diagnosis.category };
+  return { text: message, recovered: false, category: diagnosis.category, strategy };
 }

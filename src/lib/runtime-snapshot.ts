@@ -19,6 +19,7 @@ import { getChampionConfig } from "./lab/apply";
 import { autopilotEnabled, getLabSnapshot } from "./lab/service";
 import { policyDirectives } from "./lab/policy";
 import { getMemorySnapshot } from "./memory";
+import { listApprovals, listGrants } from "./approval-store";
 import { loadModelRegistry } from "./model-registry";
 import type {
   CapabilityEntry,
@@ -105,7 +106,7 @@ function buildCapabilities(input: RuntimeSnapshotInput): CapabilityEntry[] {
 export async function buildRuntimeSnapshot(input: RuntimeSnapshotInput): Promise<RuntimeSnapshot> {
   const toolNames = new Set(input.tools.map((tool) => tool.name));
 
-  const [execution, mediaTasks, assets, failures, champion, lab, memory] = await Promise.all([
+  const [execution, mediaTasks, assets, failures, champion, lab, memory, approvalsPending, grants] = await Promise.all([
     getExecutionState(input.conversationId).catch(() => undefined),
     listMediaTasks({ limit: 20 }).catch(() => []),
     listAssets({ limit: 20 }).catch(() => []),
@@ -113,6 +114,8 @@ export async function buildRuntimeSnapshot(input: RuntimeSnapshotInput): Promise
     getChampionConfig().catch(() => undefined),
     getLabSnapshot().catch(() => undefined),
     getMemorySnapshot(input.memoryAgentId).catch(() => undefined),
+    listApprovals({ conversationId: input.conversationId, status: "pending", limit: 10 }).catch(() => []),
+    listGrants(input.conversationId).catch(() => []),
   ]);
 
   const manifest = createIdentityManifest({
@@ -193,6 +196,9 @@ export async function buildRuntimeSnapshot(input: RuntimeSnapshotInput): Promise
       prompt: task.prompt,
       assetId: task.assetId,
       costUsd: jobCost(task) || undefined,
+      goal: task.goal,
+      sourceAssetIds: task.sourceAssetIds,
+      retrievalAttempts: task.retrievalAttempts,
     })),
     assets: assets.map((asset) => ({
       id: asset.id,
@@ -265,6 +271,10 @@ export async function buildRuntimeSnapshot(input: RuntimeSnapshotInput): Promise
         .slice(0, 6)
         .map((proposal) => ({ id: proposal.proposalId, status: proposal.status, summary: proposal.observedProblem })),
       activePolicies: champion ? policyDirectives(champion.config.workflowPolicy) : [],
+    },
+    approvals: {
+      pending: approvalsPending.map((record) => ({ id: record.id, tool: record.tool, summary: record.summary, createdAt: record.createdAt })),
+      sessionGrants: grants.map((grant) => ({ tool: grant.tool, grantedAt: grant.grantedAt })),
     },
     environment: {
       workspacePath: process.cwd(),
