@@ -105,3 +105,38 @@ export function reviewTraces(traces: RunTrace[], champion: LabConfig): ProposalD
     evaluationPlan: "Champion vs challenger across the trigger case, two validation cases, one held-out case, and one replay case; require the target metric to improve within cost tolerance with no critical or replay regressions.",
   };
 }
+
+/**
+ * Reliability review over live failure traces (the ones the supervisor tagged
+ * with a failureCategory). When the same category recurs, propose a bounded fix
+ * the acting agent will actually feel through the policy -> behavior mapping.
+ * Currently: repeated timeouts -> switch the workflow to fast latency mode.
+ */
+export function reviewReliability(traces: RunTrace[], champion: LabConfig): ProposalDraft | null {
+  const failures = traces.filter((trace) => trace.failureCategory);
+  if (failures.length < 2) return null;
+
+  const byCategory = new Map<string, RunTrace[]>();
+  for (const trace of failures) {
+    const key = trace.failureCategory as string;
+    byCategory.set(key, [...(byCategory.get(key) ?? []), trace]);
+  }
+
+  const timeouts = byCategory.get("timeout") ?? [];
+  if (timeouts.length >= 2 && champion.workflowPolicy.latencyMode !== "fast") {
+    const evidence = timeouts.map((trace) => trace.runId);
+    return {
+      sourceRunIds: evidence,
+      observedProblem: `Turns repeatedly failed with timeouts (${timeouts.length} recent).`,
+      traceEvidence: evidence,
+      hypothesis: "Switching the workflow to a fast latency mode (tighter answers, less deliberation, fewer tool calls) will reduce timeouts while keeping answers useful.",
+      category: "workflow_policy",
+      configPatch: { latencyMode: "fast" },
+      targetMetric: "completion_rate",
+      expectedTradeoffs: "Slightly terser answers and less deliberation in exchange for fewer failed turns.",
+      riskLevel: "low",
+      evaluationPlan: "Champion vs challenger across the standard cases; require reliability to improve with no quality regression beyond tolerance.",
+    };
+  }
+  return null;
+}

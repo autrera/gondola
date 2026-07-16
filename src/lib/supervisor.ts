@@ -82,6 +82,8 @@ export interface SupervisorRecoveryInput {
 export interface SupervisorRecoveryResult {
   text: string;
   recovered: boolean;
+  /** The diagnosed failure category, so the caller can record it for the Lab. */
+  category: FailureCategory;
 }
 
 // A quick, non-reasoning model for the recovery attempt. Deliberately a
@@ -128,15 +130,15 @@ export async function runSupervisorRecovery(input: SupervisorRecoveryInput): Pro
         input.emit({ type: "text_delta", delta: RECOVERY_LEAD_IN });
         input.emit({ type: "text_delta", delta: answer });
         input.emit({ type: "recovery", recovered: true, category: diagnosis.category });
-        return { text: `${RECOVERY_LEAD_IN}${answer}`, recovered: true };
+        return { text: `${RECOVERY_LEAD_IN}${answer}`, recovered: true, category: diagnosis.category };
       }
     } catch {
       // Recovery itself failed; fall through to the plain-language explanation.
     }
   }
-  if (input.signal?.aborted) return { text: "", recovered: false };
+  if (input.signal?.aborted) return { text: "", recovered: false, category: diagnosis.category };
   const explanation = explanationFor(diagnosis, input.canRetry);
   input.emit({ type: "text_delta", delta: explanation });
   input.emit({ type: "recovery", recovered: false, category: diagnosis.category });
-  return { text: explanation, recovered: false };
+  return { text: explanation, recovered: false, category: diagnosis.category };
 }
