@@ -2492,6 +2492,13 @@ function Workspace() {
           thinkingStreaming: false,
         } : item));
       });
+      // Persist this terminal reply so it survives a reload or chat switch. The
+      // supervisor already persists server-side recoveries; this covers the paths
+      // that reach the client as an error/stall (network failure, watchdog), so a
+      // turn never leaves your message with a reply that later disappears.
+      if (isActiveTurn() && messageText.trim()) {
+        void persistAssistantMessage(assistantId, messageText, Date.now());
+      }
       // Don't cut off a first sentence that may still be playing; otherwise drop
       // out of "thinking"/"tool" so the UI and hands-free loop can recover.
       if (isActiveTurn() && !speechQueueRunningRef.current) setPhase("idle");
