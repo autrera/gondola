@@ -16,6 +16,9 @@
 # Personal memory exports kept beside the project
 MEMORIES.md
 
+# Internal planning notes, kept local and not published
+PLAN.md
+
 # Local conversation exports
 *.conversation.jsonl
 *.transcript.jsonl
