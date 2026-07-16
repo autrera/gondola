@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { clearApiTraces, listApiTraces } from "./api-trace";
 import { SMART_FAST_CHAT_MODEL } from "./app-types";
-import { resolveCredential } from "./credential-store";
+import { maskSuffix, resolveCredential, writeStoredCredential } from "./credential-store";
 import { getSetupStatus, isSetupReady, verifySetup } from "./setup-state";
 
 const KEY = "sk-secret-abcd-1234";
@@ -141,4 +141,29 @@ test("non-interactive setup never prompts and reports not ready when unconfigure
   const { ensureSetupForRun } = await import("../cli/setup");
   const ready = await ensureSetupForRun({ interactive: false });
   assert.equal(ready, false);
+});
+
+test("a replacement key sharing the last four characters is not treated as ready", async () => {
+  mockVenice();
+  await verifySetup({ apiKey: KEY });
+  assert.equal(getSetupStatus().state, "ready");
+
+  // A different key that happens to share the same display suffix must not pass.
+  const collidingKey = "sk-totally-different-1234";
+  assert.equal(maskSuffix(collidingKey), maskSuffix(KEY));
+  writeStoredCredential("venice", collidingKey, { override: true });
+
+  assert.equal(getSetupStatus().state, "repair_required");
+});
+
+test("a connection failure is reported as unreachable, not a rejected key", async () => {
+  globalThis.fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  const result = await verifySetup({ apiKey: KEY });
+  assert.equal(result.state, "unreachable");
+  assert.equal(result.reason, "unreachable");
+  assert.match(result.message ?? "", /reach Venice/i);
+  assert.ok(!/rejected this key/i.test(result.message ?? ""));
+  assert.equal(resolveCredential("venice"), null);
 });

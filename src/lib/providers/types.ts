@@ -42,10 +42,29 @@ export interface ProviderCredential {
   source: "environment" | "file";
 }
 
+/** Coarse, sanitized failure reason shared by validation, probes, and errors. */
+export type ProviderErrorReason = "invalid_credential" | "no_credits" | "unreachable" | "unknown";
+
+/**
+ * A typed error thrown by adapters so callers can distinguish an outage / DNS
+ * failure ("unreachable") from a rejected key ("invalid_credential"), instead of
+ * defaulting every connection failure to "Venice rejected this key".
+ */
+export class ProviderError extends Error {
+  reason: ProviderErrorReason;
+  status?: number;
+  constructor(message: string, reason: ProviderErrorReason, status?: number) {
+    super(message);
+    this.name = "ProviderError";
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
 export interface CredentialValidation {
   ok: boolean;
   /** Coarse reason so callers can map to a SetupState without leaking upstream detail. */
-  reason?: "invalid_credential" | "no_credits" | "unreachable" | "unknown";
+  reason?: ProviderErrorReason;
   /** Human-readable, already sanitized (safe to show a local user). */
   message?: string;
   /** HTTP status from the upstream catalog request, when available. */
@@ -82,6 +101,9 @@ export interface ProviderAdapter {
   envVar: string;
   /** URL where a user creates/manages an API key (shown in onboarding). */
   keyManagementUrl: string;
+  /** Base URL for this provider's OpenAI-compatible API. The runtime resolves
+   *  the URL from here (via resolveCapabilityRoute) instead of hardcoding it. */
+  baseUrl: string;
   validateCredential(credential: ProviderCredential, signal?: AbortSignal): Promise<CredentialValidation>;
   listModels(credential: ProviderCredential, signal?: AbortSignal): Promise<ProviderModel[]>;
   runInferenceProbe(

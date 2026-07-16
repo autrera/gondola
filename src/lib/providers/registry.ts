@@ -143,3 +143,24 @@ export function defaultProviderConfiguration(): ProviderConfiguration {
     routes: {},
   };
 }
+
+export interface ResolvedRoute {
+  capability: Capability;
+  providerId: string;
+  adapter: ProviderAdapter;
+  baseUrl: string;
+  modelId?: string;
+}
+
+/**
+ * Resolve the runtime provider + base URL for a capability. V1 always resolves
+ * to Venice, but the runtime reads its base URL (and, later, model/provider)
+ * from here so a future capability-specific override is a real code path, not
+ * just settings metadata. Falls back to the default provider when unrouted.
+ */
+export function resolveCapabilityRoute(capability: Capability, config?: ProviderConfiguration): ResolvedRoute {
+  const route = config?.routes?.[capability];
+  const providerId = route?.providerId ?? DEFAULT_PROVIDER_ID;
+  const adapter = requireProvider(providerId);
+  return { capability, providerId, adapter, baseUrl: adapter.baseUrl, modelId: route?.modelId };
+}

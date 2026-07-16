@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  fingerprintKey,
   getCredentialStatus,
   gondolaHomeDir,
   maskSuffix,
@@ -14,7 +15,8 @@ import {
   detectAvailableCapabilities,
   requireProvider,
 } from "./providers/registry";
-import type { Capability, CapabilityRoute, ProviderModel } from "./providers/types";
+import { ProviderError } from "./providers/types";
+import type { Capability, CapabilityRoute, ProviderErrorReason, ProviderModel } from "./providers/types";
 
 // SERVER-ONLY. The single first-run authority shared by the web app and the CLI.
 // A setup is "ready" ONLY after a live catalog request succeeds, a minimal real
@@ -27,14 +29,25 @@ export type SetupState =
   | "verifying"
   | "invalid_credential"
   | "inference_failed"
+  | "unreachable"
   | "ready"
   | "repair_required";
+
+// User-facing, sanitized copy per failure reason. Keeps an outage ("unreachable")
+// from being reported as a rejected key.
+const CATALOG_FAILURE_MESSAGES: Record<ProviderErrorReason, string> = {
+  invalid_credential: "Venice rejected this key. Check that you copied the full inference key.",
+  no_credits: "This Venice key has no available credits. Add credits, then verify again.",
+  unreachable: "Gondola couldn't reach Venice. Check your connection and try again.",
+  unknown: "Venice could not verify this key right now. Try again in a moment.",
+};
 
 interface SetupRecord {
   version: 1;
   providerId: string;
   verifiedAt: string;
   verifiedSuffix: string;
+  verifiedFingerprint: string;
   defaultChatModel: string;
   capabilities: Record<Capability, boolean>;
   routes: Partial<Record<Capability, CapabilityRoute>>;
@@ -105,8 +118,9 @@ export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupS
   if (!record || record.providerId !== providerId) {
     return { ...base, state: "credential_detected" };
   }
-  if (record.verifiedSuffix !== maskSuffix(resolved.apiKey)) {
-    // The verified credential is no longer the active one.
+  // Compare a non-reversible fingerprint of the full key, not the display suffix:
+  // two different keys can share the same last four characters.
+  if (!record.verifiedFingerprint || record.verifiedFingerprint !== fingerprintKey(resolved.apiKey)) {
     return {
       ...base,
       state: "repair_required",
@@ -167,17 +181,15 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
     models = await provider.listModels(resolved, options.signal);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
-    const status = (error as { status?: number }).status;
-    const reason = status === 402 ? "no_credits" : "invalid_credential";
+    // Preserve the adapter's typed reason so an outage isn't reported as a bad key.
+    const reason: ProviderErrorReason = error instanceof ProviderError ? error.reason : "unknown";
     return {
-      state: "invalid_credential",
+      state: reason === "unreachable" ? "unreachable" : "invalid_credential",
       providerId,
       provider: info,
       credential: getCredentialStatus(providerId),
       reason,
-      message: status === 402
-        ? "This Venice key has no available credits. Add credits, then verify again."
-        : "Venice rejected this key. Check that you copied the full inference key.",
+      message: CATALOG_FAILURE_MESSAGES[reason],
     };
   }
 
@@ -219,6 +231,7 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
     providerId,
     verifiedAt: new Date().toISOString(),
     verifiedSuffix: maskSuffix(resolved.apiKey),
+    verifiedFingerprint: fingerprintKey(resolved.apiKey),
     defaultChatModel,
     capabilities,
     routes,

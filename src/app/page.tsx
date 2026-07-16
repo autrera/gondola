@@ -993,19 +993,7 @@ function Workspace() {
     localStorage.setItem("nova-settings", JSON.stringify(settings));
   }, [settings]);
 
-  // After onboarding, pre-fill the composer with the suggested first message so
-  // the user can meet Gondola with a single send.
-  useEffect(() => {
-    try {
-      const intro = localStorage.getItem("nova-onboarding-intro");
-      if (intro) {
-        setInput(intro);
-        localStorage.removeItem("nova-onboarding-intro");
-      }
-    } catch {
-      // localStorage may be unavailable; not critical.
-    }
-  }, []);
+  const introFiredRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -2487,6 +2475,41 @@ function Workspace() {
       existingUserMessageId: next.id,
     });
   }, [isBusy, messageQueue, runningConversations, sendMessage, sessionId, updateMessageQueue]);
+
+  // After onboarding, auto-submit the suggested first message once the runtime is
+  // ready. The first real agent turn (not a confirmation screen) is what proves
+  // the full runtime works. On failure the chat surfaces the error and the
+  // composer stays usable to retry, while the verified setup is preserved.
+  useEffect(() => {
+    if (introFiredRef.current) return;
+    let intro: string | null = null;
+    try {
+      intro = localStorage.getItem("nova-onboarding-intro");
+    } catch {
+      return;
+    }
+    if (!intro) return;
+    if (!connected || !sessionId || isBusy) return;
+    introFiredRef.current = true;
+    try {
+      localStorage.removeItem("nova-onboarding-intro");
+    } catch {
+      // localStorage may be unavailable; not critical.
+    }
+    void (async () => {
+      try {
+        await sendMessage(intro);
+        try {
+          localStorage.setItem("nova-onboarding-complete", "1");
+        } catch {
+          // Non-critical bookkeeping flag.
+        }
+      } catch {
+        // Turn failed; the chat surfaces the error and the composer stays usable
+        // for a retry. The verified setup is preserved.
+      }
+    })();
+  }, [connected, sessionId, isBusy, sendMessage]);
 
   const removeQueuedMessage = useCallback((id: string) => {
     updateMessageQueue((current) => current.filter((item) => item.id !== id));

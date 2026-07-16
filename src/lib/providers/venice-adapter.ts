@@ -1,4 +1,5 @@
 import { SMART_FAST_CHAT_MODEL } from "../app-types";
+import { ProviderError } from "./types";
 import type {
   Capability,
   CredentialValidation,
@@ -129,12 +130,18 @@ function toProviderModel(model: RawVeniceModel): ProviderModel {
 }
 
 async function fetchCatalog(credential: ProviderCredential, signal?: AbortSignal): Promise<ProviderModel[]> {
-  const response = await veniceRequestWithKey("/models?type=all", { method: "GET" }, credential.apiKey, signal);
+  let response: Response;
+  try {
+    response = await veniceRequestWithKey("/models?type=all", { method: "GET" }, credential.apiKey, signal);
+  } catch (error) {
+    if (isAbort(error)) throw error;
+    // Network failure, DNS error, or offline: not a credential problem.
+    throw new ProviderError(CAPABILITY_MESSAGES.unreachable, "unreachable");
+  }
   if (!response.ok) {
-    const message = await safeUpstreamMessage(response);
-    const error = new Error(message ?? `Venice models request failed (${response.status})`) as Error & { status?: number };
-    error.status = response.status;
-    throw error;
+    const reason = reasonFromStatus(response.status) ?? "unknown";
+    const upstream = await safeUpstreamMessage(response);
+    throw new ProviderError(upstream ?? CAPABILITY_MESSAGES[reason], reason, response.status);
   }
   const body = await response.json() as { data?: RawVeniceModel[] };
   return (body.data ?? [])
@@ -151,6 +158,7 @@ export const veniceAdapter: ProviderAdapter = {
   ],
   envVar: "VENICE_API_KEY",
   keyManagementUrl: "https://venice.ai/settings/api",
+  baseUrl: VENICE_BASE_URL,
 
   async validateCredential(credential, signal): Promise<CredentialValidation> {
     try {
