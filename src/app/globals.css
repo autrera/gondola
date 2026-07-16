@@ -7532,3 +7532,88 @@ input:focus-visible {
     width: auto;
   }
 }
+
+/* ==========================================================================
+   AUTHORITATIVE APP LAYOUT — two-column CSS grid (sidebar | content).
+   Replaces the fragile position:fixed sidebar + margin-left workspace, which
+   overlapped the chat at narrow/docked widths. The sidebar is always its own
+   grid column that scrolls internally, so it can never overlap the conversation
+   at any width. !important defeats the older, scattered layout rules.
+   ========================================================================== */
+.app-shell {
+  --sidebar-w: 244px;
+  display: grid !important;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  overflow: hidden !important;
+  transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
+}
+.app-shell > .topbar {
+  position: relative !important;
+  inset: auto !important;
+  width: auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  display: grid !important;
+  grid-template: auto minmax(0, 1fr) auto / 1fr !important;
+  overflow: hidden !important;
+}
+.app-shell > .topbar > .brand { grid-row: 1 !important; }
+.app-shell > .topbar > .topbar-actions {
+  grid-row: 2 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+.app-shell > .topbar > .topbar-center { grid-row: 3 !important; min-height: 0 !important; }
+.app-shell > .workspace,
+.app-shell > .workspace.entity-hidden {
+  position: relative !important;
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  width: auto !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+.app-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) !important; }
+.app-shell.sidebar-collapsed > .topbar { transform: translateX(-102%); pointer-events: none; }
+
+@media (max-width: 1080px) { .app-shell { --sidebar-w: 210px; } }
+@media (max-width: 840px)  { .app-shell { --sidebar-w: 184px; } }
+@media (max-width: 640px)  { .app-shell { --sidebar-w: 158px; } }
+@media (max-width: 480px)  { .app-shell { --sidebar-w: 136px; } }
+
+/* Chat conversation fills its column and reads as an open, borderless surface. */
+.workspace.chat-only .conversation-panel {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #0a0a0b !important;
+  box-shadow: none !important;
+}
+.workspace.chat-only:not(.has-artifacts) {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  padding: 0 !important;
+  gap: 0 !important;
+}
+
+/* Subtle, consistent transcript scrollbar (Chromium default is chunky). */
+.transcript { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .14) transparent; }
+.transcript::-webkit-scrollbar { width: 10px; }
+.transcript::-webkit-scrollbar-track { background: transparent; }
+.transcript::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: rgba(255, 255, 255, .12);
+}
+.transcript::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, .22); }
