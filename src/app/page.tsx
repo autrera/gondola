@@ -89,6 +89,8 @@ interface ChatMessage {
   thinkingMs?: number;
   /** Live delegated-worker (sub-agent) runs spawned during this turn. */
   subagents?: SubAgentRun[];
+  /** True when the supervisor recovered this reply after the inner loop failed. */
+  recovered?: boolean;
 }
 
 interface QueuedMessage {
@@ -200,6 +202,8 @@ interface AgentStreamEvent {
   toolCalls?: number;
   hitBudget?: boolean;
   ok?: boolean;
+  // Supervisor recovery signal.
+  recovered?: boolean;
 }
 
 interface SpeechFrame {
@@ -2417,6 +2421,14 @@ function Workspace() {
                 ? { ...run, running: false, turns: typeof event.turns === "number" ? event.turns : run.turns, toolCalls: typeof event.toolCalls === "number" ? event.toolCalls : run.toolCalls, hitBudget: Boolean(event.hitBudget), ok: event.ok !== false }
                 : run) };
             })));
+          } else if (event.type === "recovery") {
+            // The supervisor stepped in after the inner loop failed. Flag the
+            // message so the UI can show a subtle "recovered" note.
+            if (event.recovered === true) {
+              ui(() => setMessages((current) => current.map((item) => (
+                item.id === assistantId ? { ...item, recovered: true } : item
+              ))));
+            }
           } else if (event.type === "error") {
             throw new Error(event.message ?? "The Venice agent returned an error");
           }
@@ -3595,6 +3607,9 @@ function Workspace() {
                     if (!displayText && !(message.role === "assistant" && !message.thinkingStreaming)) return null;
                     return <MessageText text={displayText || message.statusText || `${agentName} is thinking…`} />;
                   })()}
+                  {message.role === "assistant" && message.recovered ? (
+                    <div style={{ fontSize: "0.72rem", opacity: 0.6, marginTop: "0.25rem" }}>Recovered after an error</div>
+                  ) : null}
                   {message.mediaIds?.length ? (
                     <div className="message-media">
                       {message.mediaIds.map((id) => {

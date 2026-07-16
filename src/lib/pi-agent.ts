@@ -54,6 +54,7 @@ import { MAX_SUBAGENT_DEPTH, runSubAgent } from "./subagent";
 import { recordExperience } from "./skill-distiller";
 import { recordLiveTrace } from "./lab/ingest";
 import { getChampionConfig, resolveChatRouteModel } from "./lab/apply";
+import { runSupervisorRecovery } from "./supervisor";
 import type { TraceRouting } from "./lab/types";
 import { loadModelRegistry, modelsByKind, resolveChatModelRequest, routeModelLive, type ModelCapability, type ModelKind, type RoutingResult } from "./model-registry";
 import {
@@ -1592,7 +1593,11 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       );
       await saveTranscript(input.sessionId, session.agent.state.messages).catch(() => undefined);
     }
-    throw error;
+    // A user cancellation always stops the turn; hidden (ambient) turns fail
+    // silently as before. Every other visible failure falls through to the
+    // supervisor below instead of dead-ending the chat.
+    if (input.signal?.aborted || input.hidden) throw error;
+    lastError = error instanceof Error && error.message ? error.message : lastError;
   } finally {
     input.signal?.removeEventListener("abort", abortActiveStream);
     session.runtime.suppressErrors = false;
@@ -1622,6 +1627,39 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         routing: buildTraceRouting(failSelected, routing, championModel, champion?.versionId),
       });
     })().catch(() => undefined);
+    // Outer-loop supervisor: the inner loop is out of options, so instead of
+    // dead-ending the chat, wake a supervisor that tries one safe stripped
+    // recovery and otherwise explains what broke. It never replays a turn that
+    // already ran a tool, and it streams its reply to this same turn.
+    const toolsAlreadyRan = (session.runtime.turnTrace?.toolCalls?.length ?? 0) > 0;
+    const recentContext = session.agent.state.messages
+      .slice(-8)
+      .flatMap((message) => {
+        if (message.role !== "user" && message.role !== "assistant") return [];
+        const content = message.content;
+        const text = typeof content === "string"
+          ? content.trim()
+          : content.map((part) => (part.type === "text" ? part.text : "")).join("").trim();
+        return text ? [{ role: message.role as "user" | "assistant", text }] : [];
+      })
+      .slice(-6);
+    const recovery = await runSupervisorRecovery({
+      message: input.message,
+      lastError,
+      canRetry: !toolsAlreadyRan,
+      emit: session.runtime.emit,
+      signal: input.signal,
+      context: recentContext,
+    });
+    if (recovery.text) {
+      await appendSessionRecord({
+        sessionId: input.sessionId,
+        role: "assistant",
+        text: recovery.text,
+        createdAt: new Date().toISOString(),
+      }).catch(() => undefined);
+    }
+    return;
   }
   throw new Error(`Venice is temporarily unavailable after trying compatible fallbacks. ${lastError}`);
 }
