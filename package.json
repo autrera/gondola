@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "harness": "node --import tsx src/cli/main.ts",
-    "test": "node --import tsx --test src/lib/*.test.ts",
+    "test": "node --import tsx --test $(find src -name '*.test.ts')",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
