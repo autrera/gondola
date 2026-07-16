@@ -195,6 +195,13 @@ export type ProposalStatus =
 
 export type RiskLevel = "low" | "medium" | "high";
 
+/**
+ * How a passed proposal may be promoted. Autonomy is earned only on
+ * deterministic, held-out, low-risk evidence; subjective (judge-based) or
+ * higher-risk changes stay with a human; protected surfaces never auto-promote.
+ */
+export type AutonomyTier = "auto" | "human" | "protected";
+
 export interface ImprovementProposal {
   proposalId: string;
   sourceRunIds: string[];
@@ -211,6 +218,10 @@ export interface ImprovementProposal {
   status: ProposalStatus;
   challengerVersionId?: string;
   evaluationId?: string;
+  /** Prior-outcome context that informed this proposal (the proposer <-> Lab loop). */
+  proposerFeedback?: string;
+  /** Promotion autonomy classification, set at evaluation time. */
+  autonomyTier?: AutonomyTier;
   createdAt: string;
 }
 
@@ -260,6 +271,8 @@ export interface ComparisonReport {
   championQuality: number;
   challengerQuality: number;
   qualityDeltaPct: number;
+  championCompletionPct: number;
+  challengerCompletionPct: number;
   championCost: number;
   challengerCost: number;
   costDeltaPct: number;
@@ -267,6 +280,11 @@ export interface ComparisonReport {
   challengerLatencyMs: number;
   championInterventions: number;
   challengerInterventions: number;
+  /** Improvement (positive = better) for the declared target metric. */
+  targetImprovementPct: number;
+  /** Deterministic (judge-free) pass rate on held-out cases — the trustworthy gate. */
+  championHeldOutPassRate: number;
+  challengerHeldOutPassRate: number;
   replayRegressions: string[];
   criticalRegressions: string[];
   gates: GateResult[];
