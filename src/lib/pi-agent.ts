@@ -53,6 +53,8 @@ import { enqueueRun } from "./run-queue";
 import { MAX_SUBAGENT_DEPTH, runSubAgent } from "./subagent";
 import { recordExperience } from "./skill-distiller";
 import { recordLiveTrace } from "./lab/ingest";
+import { getChampionConfig, resolveRoutedModel } from "./lab/apply";
+import type { TraceRouting } from "./lab/types";
 import { routeModelLive, type RoutingResult } from "./model-registry";
 import {
   createCustomTool,
@@ -224,6 +226,28 @@ function frameToImage(frameDataUrl?: string): ImageContent | undefined {
 function raceRouting(pending: Promise<RoutingResult | undefined>): Promise<RoutingResult | undefined> {
   const timeout = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 1_500));
   return Promise.race([pending, timeout]).catch(() => undefined);
+}
+
+// Assemble the routing record for a trace: what ran, what the shadow router
+// recommended, and whether a promoted champion config drove the choice.
+function buildTraceRouting(
+  selected: string,
+  routing: RoutingResult | undefined,
+  championModel: string | undefined,
+  championVersionId: string | undefined,
+): TraceRouting | undefined {
+  if (!routing?.model && !championModel) return undefined;
+  const drivenByChampion = Boolean(championModel && selected === championModel);
+  return {
+    selected,
+    recommended: routing?.model,
+    matched: routing?.model ? routing.model === selected : false,
+    prefer: "balanced",
+    source: drivenByChampion ? "champion" : "auto",
+    explanation: championModel
+      ? `Champion ${championVersionId ?? "config"} routes chat to ${championModel}.${routing?.explanation ? ` Router: ${routing.explanation}` : ""}`
+      : (routing?.explanation ?? "compatible"),
+  };
 }
 
 const EMPTY_USAGE = {
@@ -1280,6 +1304,13 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       prefer: "balanced",
     }, input.signal)
     : Promise.resolve(undefined);
+  // Phase 4: a promoted (champion) Lab config drives the live runtime. On the
+  // standard text path, the champion's chat route (if any) is tried first, with
+  // the user's model preserved as a fallback. No champion means no change.
+  const champion = (!input.hidden && !input.voiceMode && !hasVisionInput)
+    ? await getChampionConfig().catch(() => undefined)
+    : undefined;
+  const championModel = resolveRoutedModel(champion?.config, "chat");
   // Surface reasoning only when the selected model advertises it. Voice turns
   // need low latency, hidden turns are silent, and vision uses a separate model.
   session.runtime.showThinking = !input.voiceMode
@@ -1332,6 +1363,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         REALTIME_MULTIMODAL_FALLBACK,
       ])].slice(0, 3)
       : [...new Set([
+        ...(championModel ? [championModel] : []),
         settings.chatModel,
         SMART_FAST_CHAT_MODEL,
         REALTIME_MULTIMODAL_MODEL,
@@ -1423,9 +1455,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
               latencyMs: finishedAt - startedAt,
               completed: true,
               finalOutput: assistantText ?? "",
-              routing: routing?.model
-                ? { selected: model, recommended: routing.model, matched: routing.model === model, prefer: "balanced", explanation: routing.explanation }
-                : undefined,
+              routing: buildTraceRouting(model, routing, championModel, champion?.versionId),
             });
           })().catch(() => undefined);
         }
@@ -1479,9 +1509,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         latencyMs: failedAt - failStartedAt,
         completed: false,
         finalOutput: lastError,
-        routing: routing?.model
-          ? { selected: failSelected, recommended: routing.model, matched: routing.model === failSelected, prefer: "balanced", explanation: routing.explanation }
-          : undefined,
+        routing: buildTraceRouting(failSelected, routing, championModel, champion?.versionId),
       });
     })().catch(() => undefined);
   }

@@ -56,6 +56,8 @@ export interface TraceRouting {
   matched: boolean;
   /** The routing preference used (e.g. balanced, cheapest). */
   prefer: string;
+  /** What drove selection: a promoted champion config, or automatic/user default. */
+  source?: "champion" | "auto";
   /** Human-readable rationale from the router. */
   explanation: string;
 }
