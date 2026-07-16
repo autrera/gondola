@@ -115,7 +115,7 @@ Direct runtime dependencies should remain approximately `next`, `react`, `react-
 
 “Pi” means the minimal TypeScript coding-agent harness at [pi.dev](https://pi.dev), not Pipecat. We will embed Pi's agent core inside the Next.js server; we will not run its terminal UI as the product. Pi owns the conversation loop, history, tool calls, cancellation, and agent events. Next.js owns the browser-facing camera, microphone, playback, and visual interface.
 
-Venice is Gondola's default and only bundled full-capability provider in V1, registered through the provider registry (`src/lib/providers/`) using its OpenAI-compatible base URL and a resolved credential (`VENICE_API_KEY` env or `~/.gondola/credentials.json`). Media generation, transcription, speech, and native Venice video input remain custom Pi tools backed by direct server-to-Venice requests. Future providers may override individual capabilities through capability routes, but they must preserve Gondola's privacy, safety, permissions, cancellation, observability, and evaluation guarantees. Pi orchestrates; every V1 inference still happens on Venice.
+Venice is registered as Pi's only model provider, using its OpenAI-compatible base URL and `VENICE_API_KEY`. Media generation, transcription, speech, and native Venice video input remain custom Pi tools backed by direct server-to-Venice requests. This is necessary because Pi's generic model input currently models text and images but not a first-class video part. Pi orchestrates; every inference still happens on Venice.
 
 ## 6. Venice-only system architecture
 
@@ -141,7 +141,7 @@ flowchart LR
 
 ### Secret handling
 
-- Credentials resolve from `VENICE_API_KEY` (env, including `.env.local`) or a local `~/.gondola/credentials.json` written with owner-only permissions by onboarding. A deliberate local override wins; otherwise the environment wins; otherwise the file.
+- The only credential is `VENICE_API_KEY` in `.env.local`.
 - `.env.local` is ignored by Git and never shipped to the browser.
 - All Venice requests pass through local server routes.
 - The client receives only sanitized data, audio/media bytes, citations, status, and model metadata.
