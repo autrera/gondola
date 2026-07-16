@@ -9,7 +9,7 @@ import { getVeniceKey } from "./venice";
 // the streaming function that talks to Venice. Used by both the primary agent
 // and delegated sub-agents so there is a single source of truth.
 
-export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReasoningEffort?: boolean }): Model<"openai-completions"> {
+export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReasoningEffort?: boolean; maxTokens?: number }): Model<"openai-completions"> {
   return {
     id,
     name: id,
@@ -24,7 +24,12 @@ export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReas
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 198_000,
-    maxTokens: 768,
+    // Output-token ceiling per completion. Kept generous so long structured
+    // answers are not truncated mid-sentence, and so reasoning models (whose
+    // thinking tokens count against this budget) still have room to answer.
+    // Callers pass a smaller value for voice turns, where short spoken replies
+    // keep latency low. Auxiliary short-output calls set their own limits.
+    maxTokens: opts?.maxTokens ?? 8_192,
     compat: {
       supportsStore: false,
       supportsDeveloperRole: true,

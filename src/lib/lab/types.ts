@@ -1,0 +1,271 @@
+// Gondola Lab types. The Lab is an external control plane: it observes immutable
+// traces, proposes bounded configuration changes, evaluates a challenger against
+// the champion in isolation, and waits for human approval before promotion. The
+// acting runtime never grades or promotes itself.
+
+export const RUNTIME_VERSION = "gondola-0.1.0";
+
+// ── Immutable run traces (Milestone 1) ───────────────────────────────────────
+
+export interface ModelCallRecord {
+  model: string;
+  purpose: string;
+  costUsd: number;
+  latencyMs: number;
+}
+
+export interface ToolCallRecord {
+  tool: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface TraceArtifact {
+  id: string;
+  kind: "image" | "video" | "audio";
+  approved: boolean;
+}
+
+export interface DeterministicCheck {
+  name: string;
+  critical: boolean;
+  passed: boolean;
+  detail?: string;
+}
+
+export interface DeterministicEvaluation {
+  checks: DeterministicCheck[];
+  passed: boolean;
+}
+
+export interface SemanticEvaluation {
+  judgeConfigVersion: string;
+  score: number;
+  rationale: string;
+}
+
+export interface RunTrace {
+  runId: string;
+  runtimeVersion: string;
+  configVersionId: string;
+  goal: string;
+  constraints: string[];
+  modelsSelected: string[];
+  modelCalls: ModelCallRecord[];
+  toolCalls: ToolCallRecord[];
+  toolErrors: string[];
+  artifacts: TraceArtifact[];
+  humanInterventions: number;
+  costUsd: number;
+  latencyMs: number;
+  completed: boolean;
+  finalOutput: string;
+  deterministic?: DeterministicEvaluation;
+  semantic?: SemanticEvaluation;
+  finalized: boolean;
+  createdAt: string;
+  finalizedAt?: string;
+}
+
+// ── Versioned configuration (Milestone 2) ────────────────────────────────────
+
+export interface WorkflowPolicy {
+  /** How many low-cost concepts to generate before choosing. */
+  conceptCount: number;
+  /** Use a distinct critic role to review candidates. */
+  useSeparateCritic: boolean;
+  /** Require analyze_media on an image before animating it. */
+  requireAnalyzeBeforeAnimate: boolean;
+  /** Revise while quality is below this threshold (null disables revision). */
+  reviseBelowQuality: number | null;
+  /** Maximum revision iterations. */
+  maxRevisions: number;
+  /** Hard spend cap for the workflow. */
+  budgetUsd: number;
+}
+
+export interface RoutingRule {
+  role: string;
+  model: string;
+}
+
+export interface RoutingConfig {
+  defaultModel: string;
+  rules: RoutingRule[];
+}
+
+export interface AgentRole {
+  name: string;
+  instructions: string;
+}
+
+export interface LabConfig {
+  workflowPolicy: WorkflowPolicy;
+  routing: RoutingConfig;
+  roles: AgentRole[];
+  toolDescriptions: Record<string, string>;
+}
+
+export interface ConfigVersion {
+  versionId: string;
+  parentVersionId: string | null;
+  sourceProposalId: string | null;
+  createdAt: string;
+  contentHash: string;
+  changeSummary: string;
+  config: LabConfig;
+}
+
+export interface PromotionRecord {
+  action: "promote" | "rollback";
+  fromVersionId: string | null;
+  toVersionId: string;
+  proposalId: string | null;
+  evaluationId: string | null;
+  approvedBy: string;
+  approvedAt: string;
+}
+
+export interface ConfigState {
+  championVersionId: string | null;
+  versions: ConfigVersion[];
+  history: PromotionRecord[];
+}
+
+// ── Improvement proposals (Milestone 3) ──────────────────────────────────────
+
+// Only these categories may be proposed in the first milestone.
+export const ALLOWED_PROPOSAL_CATEGORIES = ["workflow_policy", "model_routing", "agent_role", "tool_description"] as const;
+export type ProposalCategory = (typeof ALLOWED_PROPOSAL_CATEGORIES)[number];
+
+// Categories the Lab must never touch.
+export const DISALLOWED_PROPOSAL_CATEGORIES = [
+  "permissions",
+  "credentials",
+  "budget_enforcement",
+  "grader_prompts",
+  "promotion_thresholds",
+  "control_plane_code",
+  "trace_history",
+] as const;
+
+export type ProposalStatus =
+  | "draft"
+  | "evaluating"
+  | "failed"
+  | "ready_for_review"
+  | "approved"
+  | "rejected"
+  | "promoted"
+  | "rolled_back";
+
+export type RiskLevel = "low" | "medium" | "high";
+
+export interface ImprovementProposal {
+  proposalId: string;
+  sourceRunIds: string[];
+  observedProblem: string;
+  traceEvidence: string[];
+  hypothesis: string;
+  category: ProposalCategory;
+  /** For the workflow-policy slice this is a partial WorkflowPolicy. */
+  configPatch: Partial<WorkflowPolicy>;
+  targetMetric: string;
+  expectedTradeoffs: string;
+  riskLevel: RiskLevel;
+  evaluationPlan: string;
+  status: ProposalStatus;
+  challengerVersionId?: string;
+  evaluationId?: string;
+  createdAt: string;
+}
+
+// ── Evaluation (Milestones 5 & 6) ────────────────────────────────────────────
+
+export type EvaluationCaseKind = "trigger" | "validation" | "held_out" | "replay";
+
+export interface EvaluationCase {
+  id: string;
+  kind: EvaluationCaseKind;
+  task: string;
+  difficulty: number;
+  /** For replay cases: whether the champion previously passed. */
+  championBaselinePass?: boolean;
+}
+
+export interface RunGrade {
+  completed: boolean;
+  deterministic: DeterministicEvaluation;
+  semanticScore: number;
+  toolFailures: number;
+  modelFailures: number;
+  humanInterventions: number;
+  costUsd: number;
+  latencyMs: number;
+  modelCalls: number;
+  toolCalls: number;
+}
+
+export interface CaseComparison {
+  caseId: string;
+  kind: EvaluationCaseKind;
+  championTraceId: string;
+  challengerTraceId: string;
+  champion: RunGrade;
+  challenger: RunGrade;
+}
+
+export interface GateResult {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ComparisonReport {
+  targetMetric: string;
+  championQuality: number;
+  challengerQuality: number;
+  qualityDeltaPct: number;
+  championCost: number;
+  challengerCost: number;
+  costDeltaPct: number;
+  championLatencyMs: number;
+  challengerLatencyMs: number;
+  championInterventions: number;
+  challengerInterventions: number;
+  replayRegressions: string[];
+  criticalRegressions: string[];
+  gates: GateResult[];
+  readyForReview: boolean;
+}
+
+export interface EvaluationRecord {
+  evaluationId: string;
+  proposalId: string;
+  championVersionId: string;
+  challengerVersionId: string;
+  judgeConfigVersion: string;
+  seed: number;
+  caseIds: string[];
+  cases: CaseComparison[];
+  report: ComparisonReport;
+  contaminationFree: boolean;
+  createdAt: string;
+}
+
+export interface JudgeConfig {
+  version: string;
+  model: string;
+  prompt: string;
+}
+
+export interface PromotionThresholds {
+  minQualityImprovementPct: number;
+  maxCostIncreasePct: number;
+}
+
+export interface ConfigFieldDiff {
+  field: string;
+  from: unknown;
+  to: unknown;
+}
