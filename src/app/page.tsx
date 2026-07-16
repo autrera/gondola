@@ -2194,7 +2194,10 @@ function Workspace() {
     // sized generously so slow-but-real tool calls are never cut off.
     let streamIdleTimer: number | undefined;
     let watchdogTripped = false;
-    const AGENT_STREAM_IDLE_MS = 90_000;
+    // Only trips when the stream is completely silent (reset on any byte). Kept
+    // above the server's per-model timeout (120s) so the server's own timeout and
+    // model fallback run first; this is purely a "server truly hung" safety net.
+    const AGENT_STREAM_IDLE_MS = 240_000;
     const armStreamWatchdog = () => {
       if (streamIdleTimer) window.clearTimeout(streamIdleTimer);
       streamIdleTimer = window.setTimeout(() => {

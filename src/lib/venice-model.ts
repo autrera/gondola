@@ -46,7 +46,11 @@ export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReas
   };
 }
 
-export function createVeniceStreamFn(timeoutMs = 12_000): StreamFn {
+// Per-model stream timeout. Sized for real work (reasoning, tool calls, long
+// context) rather than snappy replies: a model gets up to two minutes before the
+// turn abandons it and falls back to the next candidate. Genuine failures (errors
+// or empty replies) still fail fast; only a true hang waits out the full budget.
+export function createVeniceStreamFn(timeoutMs = 120_000): StreamFn {
   return (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
     const hasVisualContext = context.messages.some((message) => (
       message.role === "user"
