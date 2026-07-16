@@ -63,6 +63,13 @@ export async function seedDemo(): Promise<{ champion: ConfigVersion; traces: num
   return { champion, traces: created };
 }
 
+/** True when two config patches make the same change (key order-independent). */
+function sameConfigPatch(a: ImprovementProposal["configPatch"], b: ImprovementProposal["configPatch"]): boolean {
+  const normalize = (patch: ImprovementProposal["configPatch"]) =>
+    JSON.stringify(Object.fromEntries(Object.entries(patch).sort(([left], [right]) => left.localeCompare(right))));
+  return normalize(a) === normalize(b);
+}
+
 /** Reviewer proposes one bounded workflow-policy change and creates a challenger. */
 export async function generateProposal(): Promise<ImprovementProposal | null> {
   const champion = await ensureChampion();
@@ -71,6 +78,14 @@ export async function generateProposal(): Promise<ImprovementProposal | null> {
   const draft = reviewTraces(traces, champion.config);
   if (!draft) return null;
   assertAllowedProposalCategory(draft.category);
+
+  // Don't propose the same change twice. If an existing proposal already makes
+  // this exact change (same category + config patch), there is nothing new to
+  // suggest, so returning null surfaces "no new suggestions" in the Lab.
+  const existing = await listProposals();
+  if (existing.some((candidate) => candidate.category === draft.category && sameConfigPatch(candidate.configPatch, draft.configPatch))) {
+    return null;
+  }
 
   const proposalId = crypto.randomUUID();
   const challengerConfig = applyWorkflowPatch(champion.config, draft.configPatch);
