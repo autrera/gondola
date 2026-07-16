@@ -80,6 +80,14 @@ export interface RunTrace {
   finalOutput: string;
   /** Explainable routing recommendation vs. what ran (observe-mode). */
   routing?: TraceRouting;
+  /**
+   * When the inner loop failed, the supervisor's diagnosis category (timeout,
+   * rate_limit, ...). This is the signal the reviewer aggregates to propose
+   * reliability fixes. Absent on successful turns.
+   */
+  failureCategory?: string;
+  /** True when the supervisor recovered a best-effort answer after the failure. */
+  recoveredBySupervisor?: boolean;
   deterministic?: DeterministicEvaluation;
   semantic?: SemanticEvaluation;
   finalized: boolean;
@@ -102,6 +110,12 @@ export interface WorkflowPolicy {
   maxRevisions: number;
   /** Hard spend cap for the workflow. */
   budgetUsd: number;
+  /**
+   * Reliability lever the outer loop can tune. "fast" tells the acting agent to
+   * favor speed (tight answers, minimal deliberation) after repeated timeouts;
+   * "balanced" is the default. Optional so older configs remain valid.
+   */
+  latencyMode?: "fast" | "balanced";
 }
 
 export interface RoutingRule {

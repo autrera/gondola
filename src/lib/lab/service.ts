@@ -24,9 +24,9 @@ import {
   simulatedJudge,
   simulatedTaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, reviewTraces } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, reviewReliability, reviewTraces } from "./reviewer";
 import { createLiveJudge, createLiveTaskRunner, makeLiveRunAgent } from "./runner";
-import type { ConfigVersion, EvaluationRecord, ImprovementProposal, RunTrace } from "./types";
+import type { ConfigVersion, EvaluationRecord, ImprovementProposal, ProposalCategory, RunTrace } from "./types";
 
 export async function ensureChampion(): Promise<ConfigVersion> {
   const existing = await getChampion();
@@ -73,9 +73,12 @@ function sameConfigPatch(a: ImprovementProposal["configPatch"], b: ImprovementPr
 /** Reviewer proposes one bounded workflow-policy change and creates a challenger. */
 export async function generateProposal(): Promise<ImprovementProposal | null> {
   const champion = await ensureChampion();
+  const allTraces = await listTraces();
   const visibleTasks = new Set(reviewerVisibleCases().map((testCase) => testCase.task));
-  const traces = (await listTraces()).filter((trace) => visibleTasks.has(trace.goal));
-  const draft = reviewTraces(traces, champion.config);
+  const visibleTraces = allTraces.filter((trace) => visibleTasks.has(trace.goal));
+  // Creative-quality review over the reviewer-visible cases, then a reliability
+  // review over live failure traces the supervisor tagged. First non-null wins.
+  const draft = reviewTraces(visibleTraces, champion.config) ?? reviewReliability(allTraces, champion.config);
   if (!draft) return null;
   assertAllowedProposalCategory(draft.category);
 
@@ -106,6 +109,50 @@ export async function generateProposal(): Promise<ImprovementProposal | null> {
 }
 
 /**
+ * A short, human-readable note about the agent's own recent failures, for
+ * self-awareness in the live system prompt. Empty when nothing notable recurs.
+ */
+export async function recentFailureSummary(limit = 12): Promise<string> {
+  const traces = await listTraces(limit).catch(() => [] as RunTrace[]);
+  const failures = traces.filter((trace) => trace.failureCategory);
+  if (failures.length < 2) return "";
+  const counts = new Map<string, number>();
+  for (const trace of failures) {
+    const key = trace.failureCategory as string;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const parts = [...counts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([category, n]) => `${n} ${category.replace(/_/g, " ")}`);
+  return `Reliability note: ${failures.length} of your recent turns hit errors (${parts.join(", ")}). If a pattern like this keeps recurring, you may call propose_harness_change to flag it to Gondola Lab for a reviewed, bounded fix.`;
+}
+
+/** Whether the Lab autopilot may promote low-risk, passed proposals without a human. */
+export function autopilotEnabled(): boolean {
+  return process.env.GONDOLA_LAB_AUTOPILOT === "1";
+}
+
+// Categories the autopilot may promote unattended: narrow, reversible, and never
+// touching permissions, credentials, budget, graders, thresholds, or code.
+const AUTO_PROMOTABLE_CATEGORIES: ProposalCategory[] = ["workflow_policy"];
+
+/**
+ * Promote a passed proposal without a human ONLY when autopilot is enabled and
+ * the proposal is low-risk and in an auto-promotable category. Returns the
+ * promoted version, or null when autopilot is off or the proposal is ineligible.
+ * A rollback is always available afterward, and the promotion is audited under
+ * the "gondola-auto" approver.
+ */
+export async function maybeAutoPromote(proposalId: string): Promise<ConfigVersion | null> {
+  if (!autopilotEnabled()) return null;
+  const proposal = await getProposal(proposalId);
+  if (!proposal || proposal.status !== "ready_for_review") return null;
+  if (proposal.riskLevel !== "low") return null;
+  if (!AUTO_PROMOTABLE_CATEGORIES.includes(proposal.category)) return null;
+  return promoteProposal(proposalId, "gondola-auto").catch(() => null);
+}
+
+/**
  * Evaluate a proposal's challenger against the champion across all cases.
  * With `live`, it runs the actual agent (real Venice inference, real judge)
  * instead of the deterministic simulation; otherwise it stays offline.
@@ -132,6 +179,10 @@ export async function evaluateProposal(proposalId: string, opts?: { live?: boole
     status: record.report.readyForReview ? "ready_for_review" : "failed",
     evaluationId: record.evaluationId,
   });
+  // Bounded autonomy: with autopilot on, a low-risk proposal that passed all
+  // gates is promoted automatically (audited, reversible). Off by default, so
+  // promotion stays human-gated unless the owner opts in.
+  if (record.report.readyForReview) await maybeAutoPromote(proposalId).catch(() => null);
   return record;
 }
 

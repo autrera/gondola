@@ -38,6 +38,10 @@ export interface LiveTraceInput {
   finalOutput: string;
   /** Explainable routing recommendation vs. what actually ran. */
   routing?: TraceRouting;
+  /** On failure, the supervisor's diagnosis category (timeout, rate_limit, ...). */
+  failureCategory?: string;
+  /** True when the supervisor recovered a best-effort answer after the failure. */
+  recoveredBySupervisor?: boolean;
 }
 
 /**
@@ -75,6 +79,8 @@ export async function recordLiveTrace(input: LiveTraceInput): Promise<RunTrace |
       completed: input.completed,
       finalOutput: (input.finalOutput ?? "").slice(0, 4_000),
       ...(input.routing ? { routing: input.routing } : {}),
+      ...(input.failureCategory ? { failureCategory: input.failureCategory } : {}),
+      ...(input.recoveredBySupervisor ? { recoveredBySupervisor: true } : {}),
       finalized: false,
       createdAt: new Date().toISOString(),
     };

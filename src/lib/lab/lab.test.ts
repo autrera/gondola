@@ -11,7 +11,7 @@ import {
   runEvaluation,
   type TaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, reviewReliability } from "./reviewer";
 import {
   createChallenger,
   getChampion,
@@ -113,6 +113,21 @@ test("generateProposal does not create the same proposal twice", async () => {
   assert.ok(first, "the first proposal should be generated");
   const second = await generateProposal();
   assert.equal(second, null, "the same change must not be proposed twice");
+});
+
+test("reviewReliability proposes fast latency mode after repeated timeouts", () => {
+  const champion = naiveChampionConfig();
+  const failing = (): RunTrace => ({
+    ...buildTrace("v", "a live user goal", { approved: true, concepts: 1, cost: 0, interventions: 0 }),
+    completed: false,
+    failureCategory: "timeout",
+  });
+  const draft = reviewReliability([failing(), failing()], champion);
+  assert.ok(draft, "repeated timeouts should yield a proposal");
+  assert.equal(draft?.configPatch.latencyMode, "fast");
+  assert.equal(draft?.category, "workflow_policy");
+  // Below the threshold (a single failure), nothing is proposed.
+  assert.equal(reviewReliability([failing()], champion), null);
 });
 
 test("the candidate cannot modify graders or promotion thresholds", () => {
