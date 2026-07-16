@@ -3,6 +3,7 @@ import { streamSimple as streamOpenAICompatible } from "@earendil-works/pi-ai/ap
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { completeApiTrace, describeApiTraceError, startApiTrace, traceRequestFromPayload, updateApiTrace, type ApiTraceUsage } from "./api-trace";
 import { observeBillingBalance } from "./billing-balance-state";
+import { resolveCapabilityRoute } from "./providers/registry";
 import { getVeniceKey } from "./venice";
 
 // Shared description of a Venice model over the OpenAI-completions API shape and
@@ -10,12 +11,15 @@ import { getVeniceKey } from "./venice";
 // and delegated sub-agents so there is a single source of truth.
 
 export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReasoningEffort?: boolean; maxTokens?: number }): Model<"openai-completions"> {
+  // Resolve the provider + base URL through the capability registry instead of
+  // hardcoding Venice, so a future per-capability override is a real code path.
+  const route = resolveCapabilityRoute("chat");
   return {
     id,
     name: id,
     api: "openai-completions",
-    provider: "venice",
-    baseUrl: "https://api.venice.ai/api/v1",
+    provider: route.providerId,
+    baseUrl: route.baseUrl,
     // Reasoning is opt-in per turn: interactive typed chats surface a visible
     // thinking trace, while voice/vision/sub-agent/memory turns stay fast and
     // thinking-free. When true, pi-ai parses the model's reasoning deltas so we

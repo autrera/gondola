@@ -1,9 +1,10 @@
 {
-  "name": "venice-alien",
+  "name": "gondola",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
+    "gondola": "bin/nova.mjs",
     "nova": "bin/nova.mjs"
   },
   "scripts": {

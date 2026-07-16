@@ -23,6 +23,7 @@ export interface SetupStatusView {
     | "verifying"
     | "invalid_credential"
     | "inference_failed"
+    | "unreachable"
     | "ready"
     | "repair_required";
   providerId: string;
@@ -36,8 +37,8 @@ export interface SetupStatusView {
   reason?: string;
 }
 
-type Screen = "welcome" | "connect" | "credential" | "capabilities" | "permissions" | "first";
-type ConfirmationPolicy = "always" | "risky" | "never";
+type Screen = "welcome" | "connect" | "credential" | "capabilities" | "permissions";
+type ConfirmationPolicy = "always" | "risky";
 
 const CAPABILITY_LABELS: Array<{ key: string; label: string; blurb: string }> = [
   { key: "chat", label: "Conversation", blurb: "Natural back-and-forth chat" },
@@ -77,8 +78,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
-  // Permissions (screen 5). File + terminal default OFF.
-  const [workspaceFolder, setWorkspaceFolder] = useState("");
+  // Permissions. File + terminal default OFF; terminal requires file access.
   const [fileAccess, setFileAccess] = useState(false);
   const [shellAccess, setShellAccess] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationPolicy>("risky");
@@ -162,19 +162,23 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
   }, []);
 
   const finish = useCallback(() => {
+    // Terminal access implies file access; never persist shell without file.
+    const shell = fileAccess && shellAccess;
     try {
       const savedSettings = JSON.parse(localStorage.getItem("nova-settings") ?? "{}") as Record<string, unknown>;
-      localStorage.setItem("nova-settings", JSON.stringify({ ...savedSettings, fileAccess, shellAccess }));
+      localStorage.setItem("nova-settings", JSON.stringify({ ...savedSettings, fileAccess, shellAccess: shell }));
       localStorage.setItem(
         "nova-onboarding-permissions",
-        JSON.stringify({ workspaceFolder: workspaceFolder.trim(), fileAccess, shellAccess, confirmationPolicy: confirmation }),
+        JSON.stringify({ fileAccess, shellAccess: shell, confirmationPolicy: confirmation }),
       );
+      // Signals the workspace to auto-submit the first message on entry, so the
+      // real agent turn (not a confirmation screen) completes onboarding.
       localStorage.setItem("nova-onboarding-intro", INTRO_PROMPT);
     } catch {
       // localStorage may be unavailable; onboarding still completes.
     }
     onReady();
-  }, [confirmation, fileAccess, onReady, shellAccess, workspaceFolder]);
+  }, [confirmation, fileAccess, onReady, shellAccess]);
 
   const provider = status?.provider;
   const keyUrl = provider?.keyManagementUrl ?? "https://venice.ai/settings/api";
@@ -184,7 +188,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
     <div className="onb-root">
       <div className="onb-card">
         <div className="onb-progress" aria-hidden="true">
-          {(["welcome", "connect", "credential", "capabilities", "permissions", "first"] as Screen[]).map((step) => (
+          {(["welcome", "connect", "credential", "capabilities", "permissions"] as Screen[]).map((step) => (
             <span key={step} className={`onb-dot ${screen === step ? "is-active" : ""}`} />
           ))}
         </div>
@@ -278,19 +282,27 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
             <h1>Choose what Gondola can do</h1>
             <p className="onb-lead">You're in control. File and terminal access stay off until you turn them on. Camera and microphone are requested only when you first use them.</p>
 
-            <label className="onb-field">
-              <span>Workspace folder <small>optional</small></span>
-              <input type="text" placeholder="~/projects/my-workspace" value={workspaceFolder} onChange={(event) => setWorkspaceFolder(event.target.value)} />
-            </label>
-
             <div className="onb-toggle-group">
               <label className="onb-toggle">
-                <input type="checkbox" checked={fileAccess} onChange={(event) => setFileAccess(event.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={fileAccess}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setFileAccess(enabled);
+                    if (!enabled) setShellAccess(false);
+                  }}
+                />
                 <span><strong>File access</strong><small>Let Gondola read and edit files in the workspace</small></span>
               </label>
-              <label className="onb-toggle">
-                <input type="checkbox" checked={shellAccess} onChange={(event) => setShellAccess(event.target.checked)} />
-                <span><strong>Terminal access</strong><small>Let Gondola run commands (with confirmation)</small></span>
+              <label className={`onb-toggle ${fileAccess ? "" : "is-disabled"}`}>
+                <input
+                  type="checkbox"
+                  checked={fileAccess && shellAccess}
+                  disabled={!fileAccess}
+                  onChange={(event) => setShellAccess(event.target.checked)}
+                />
+                <span><strong>Terminal access</strong><small>{fileAccess ? "Let Gondola run commands" : "Requires file access"}</small></span>
               </label>
             </div>
 
@@ -299,24 +311,14 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
               <select value={confirmation} onChange={(event) => setConfirmation(event.target.value as ConfirmationPolicy)}>
                 <option value="always">Ask before every action</option>
                 <option value="risky">Ask before risky actions</option>
-                <option value="never">Never ask</option>
               </select>
+              <small className="onb-note">Destructive actions always ask for confirmation, whatever you choose here.</small>
             </label>
 
             <div className="onb-actions">
               <button className="onb-link" onClick={() => setScreen("capabilities")}>Back</button>
-              <button className="onb-primary" onClick={() => setScreen("first")}>Continue</button>
+              <button className="onb-primary" onClick={finish}>Enter Gondola</button>
             </div>
-          </section>
-        )}
-
-        {screen === "first" && (
-          <section className="onb-screen">
-            <span className="onb-badge">You're all set</span>
-            <h1>Say hello to Gondola</h1>
-            <p className="onb-lead">Gondola is ready. We'll start you off with a first message so you can see what it can do.</p>
-            <div className="onb-intro">“{INTRO_PROMPT}”</div>
-            <button className="onb-primary" onClick={finish}>Enter Gondola</button>
           </section>
         )}
       </div>

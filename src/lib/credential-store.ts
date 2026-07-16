@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -124,6 +125,15 @@ export function maskSuffix(key: string): string {
   const trimmed = key.trim();
   if (trimmed.length <= 4) return "••••";
   return `••••${trimmed.slice(-4)}`;
+}
+
+/**
+ * Non-reversible SHA-256 fingerprint of the full key. Used to detect a changed
+ * credential reliably: two different keys can share the same last four
+ * characters, so the display suffix must not be used for equality checks.
+ */
+export function fingerprintKey(key: string): string {
+  return createHash("sha256").update(key.trim()).digest("hex");
 }
 
 /**

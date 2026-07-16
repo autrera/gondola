@@ -111,6 +111,7 @@ export function ProvidersPanel() {
     : status.state === "ready" ? "Connected"
     : status.state === "repair_required" ? "Repair needed"
     : status.state === "not_configured" ? "Not connected"
+    : status.state === "unreachable" ? "Offline"
     : "Needs verification";
 
   return (
