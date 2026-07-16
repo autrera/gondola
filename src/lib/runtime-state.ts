@@ -159,6 +159,14 @@ export interface RuntimeApprovals {
   sessionGrants: { tool: string; grantedAt: string }[];
 }
 
+export interface RuntimeArchitecture {
+  version: string;
+  purpose: string;
+  principles: { title: string; text: string }[];
+  roles: { role: string; responsibility: string; boundary: string }[];
+  subsystems: { name: string; purpose: string }[];
+}
+
 export interface RuntimeSnapshot {
   generatedAt: string;
   identity: RuntimeIdentity;
@@ -176,6 +184,7 @@ export interface RuntimeSnapshot {
   checkpoints: RuntimeCheckpoint[];
   lab: RuntimeLab;
   approvals: RuntimeApprovals;
+  architecture: RuntimeArchitecture;
   environment: RuntimeEnvironment;
 }
 
@@ -196,12 +205,13 @@ export type RuntimeSection =
   | "checkpoints"
   | "lab"
   | "approvals"
+  | "architecture"
   | "environment";
 
 export const RUNTIME_SECTIONS: RuntimeSection[] = [
   "identity", "objective", "plan", "execution", "capabilities", "jobs", "assets",
   "models", "memory", "permissions", "budget", "supervisor", "failures",
-  "checkpoints", "lab", "approvals", "environment",
+  "checkpoints", "lab", "approvals", "architecture", "environment",
 ];
 
 // ── Selection (runtime.status(section)) ───────────────────────────────────────
@@ -225,6 +235,7 @@ export function selectRuntimeSection(snapshot: RuntimeSnapshot, section?: Runtim
     case "checkpoints": return snapshot.checkpoints;
     case "lab": return snapshot.lab;
     case "approvals": return snapshot.approvals;
+    case "architecture": return snapshot.architecture;
     case "environment": return snapshot.environment;
     default: return snapshot;
   }
@@ -299,6 +310,8 @@ export function renderRuntimeExplain(snapshot: RuntimeSnapshot): string {
   const pendingAssets = snapshot.assets.filter((asset) => asset.status !== "ready" && asset.status !== "succeeded");
   const openFailures = snapshot.failures.filter((failure) => failure.status === "open");
   const blocks: string[] = [];
+
+  blocks.push(snapshot.architecture.purpose);
 
   blocks.push(
     `You are ${id.entity}, currently running on model ${id.currentModel}. You operate inside ${id.orchestrator}, whose execution runtime is ${id.executionRuntime}. `

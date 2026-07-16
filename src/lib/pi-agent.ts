@@ -16,6 +16,7 @@ import {
 } from "./app-types";
 import { currentDateTimeContext, needsLiveWebResearch } from "./conversation";
 import { createIdentityManifest, identitySelfModelPrompt } from "./identity";
+import { renderConstitutionPrompt } from "./constitution";
 import {
   appendSessionRecord,
   captureExplicitMemory,
@@ -301,6 +302,7 @@ function buildSystemPrompt(
   const identityManifest = createIdentityManifest({ entity: { name: profile.name } });
   return [
     identitySelfModelPrompt(identityManifest),
+    renderConstitutionPrompt(),
     runtimeHeader ?? "",
     profile.description ? `${profile.description.replace(/\.\s*$/, "")}.` : "",
     profile.instructions,
@@ -1346,7 +1348,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const runtimeStatusTool: AgentTool = {
     name: "runtime_status",
     label: "Runtime status",
-    description: "Query authoritative runtime state instead of reconstructing it from the conversation. Returns structured JSON. Pass an optional section (identity, objective, execution, capabilities, jobs, assets, models, memory, permissions, budget, supervisor, failures, checkpoints, lab, environment) to focus. Consult this before claiming or denying a capability, before checking pending jobs, assets, budget, failures, or Lab/champion state - these are facts, not things to remember.",
+    description: "Query authoritative runtime state instead of reconstructing it from the conversation. Returns structured JSON. Pass an optional section (identity, objective, execution, capabilities, jobs, assets, models, memory, permissions, budget, supervisor, failures, checkpoints, lab, approvals, architecture, environment) to focus. The 'architecture' section returns the Gondola constitution: purpose, principles, roles, and subsystems. Consult this before claiming or denying a capability, before checking pending jobs, assets, budget, failures, or Lab/champion state - these are facts, not things to remember.",
     parameters: Type.Object({
       section: Type.Optional(Type.Union(RUNTIME_SECTIONS.map((section) => Type.Literal(section)))),
     }),
