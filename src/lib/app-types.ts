@@ -127,6 +127,7 @@ export interface MediaArtifact {
   url?: string;
   model?: string;
   queueId?: string;
+  taskId?: string;
   downloadUrl?: string;
   quote?: number;
   progress?: number;
