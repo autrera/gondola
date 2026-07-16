@@ -7959,3 +7959,34 @@ input:focus-visible {
   /* Room for the reveal (hamburger) button over the chat header. */
   .app-shell.sidebar-collapsed .conversation-header { padding-left: 52px !important; }
 }
+
+/* ── Clearer chat attribution ─────────────────────────────────────────────
+   Make it obvious what you wrote vs. what Gondola replied: show the sender
+   label again (it was visually hidden), and give the user's messages a distinct
+   right-aligned accent bubble instead of the near-invisible dark one. */
+.message-meta {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
+  display: flex;
+  align-items: center;
+  margin-bottom: 5px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.message-meta .message-avatar { display: none; }
+.message-user .message-meta { justify-content: flex-end; }
+.message-user > .message-content {
+  max-width: min(80%, 620px);
+  padding: 10px 14px;
+  border: 1px solid rgba(184, 207, 232, .24);
+  border-radius: 16px 16px 5px 16px;
+  background: rgba(184, 207, 232, .10);
+  color: #eef2f7;
+}
+.message-assistant > .message-content { width: 100%; }
