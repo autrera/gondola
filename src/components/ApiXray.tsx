@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CloseIcon, PlusIcon, XrayIcon } from "@/components/Icons";
-import type { ApiCapability, ApiTraceEvent } from "@/lib/api-trace";
+import type { ApiCapability, ApiTraceError, ApiTraceEvent } from "@/lib/api-trace";
 import type { CatalogModel } from "@/lib/app-types";
 import type { BillingBalance } from "@/lib/billing-balance";
 import type { UsageAnalytics, UsageAnalyticsModel, UsageLookback } from "@/lib/usage-analytics";
@@ -51,6 +51,21 @@ const capabilities: Array<{ capability: ApiCapability; title: string; glyph: str
   { capability: "music", title: "Music", glyph: "♪" },
   { capability: "embeddings", title: "Vectors", glyph: "E" },
 ];
+
+// Human-readable attribution for a failure: whether Venice rejected it or Gondola
+// stopped it, plus a one-line explanation for the inspector.
+const ERROR_SOURCE: Record<string, { label: string; tone: string; note: string }> = {
+  venice: { label: "From Venice", tone: "venice", note: "Venice returned this error. Its complete response body is shown below." },
+  timeout: { label: "Timeout · Gondola", tone: "timeout", note: "Gondola stopped waiting — a time limit we impose, not a rejection Venice sent. The request may still have been processing upstream." },
+  cancelled: { label: "Cancelled locally", tone: "cancelled", note: "Cancelled on our side (you interrupted, a newer turn took over, the chat or voice mode changed, or a Gondola timeout fired). Venice did not send an error body." },
+  network: { label: "Network", tone: "network", note: "The request could not reach Venice (connection or DNS). This is not a Venice rejection." },
+  client: { label: "Gondola config", tone: "client", note: "A Gondola-side problem before the request reached Venice — for example a missing or invalid API key." },
+  unknown: { label: "Unknown source", tone: "unknown", note: "Gondola could not attribute this failure to a specific source." },
+};
+
+function errorSource(error: ApiTraceError): { label: string; tone: string; note: string } {
+  return ERROR_SOURCE[error.source ?? "unknown"] ?? ERROR_SOURCE.unknown;
+}
 
 function formatLatency(ms: number | undefined): string {
   if (ms === undefined) return "Live";
@@ -486,7 +501,7 @@ export function ApiXray({ open, onClose, models }: ApiXrayProps) {
               const usage = requestUsage(event);
               const costUnavailable = event.capability !== "models" && !cost;
               return <button className={`xray-request-row is-${event.status}`} onClick={() => setSelectedEventId(event.id)} key={event.id}>
-                <span className="xray-request-name"><i /><span><strong>{event.label}</strong><small><b>{event.method}</b> {event.endpoint} · {formatTime(event.startedAt)}</small>{event.error?.message && <small className="xray-error-summary" title={event.error.message}>Error: {event.error.message}</small>}</span></span>
+                <span className="xray-request-name"><i /><span><strong>{event.label}</strong><small><b>{event.method}</b> {event.endpoint} · {formatTime(event.startedAt)}</small>{event.error?.message && <small className="xray-error-summary" title={event.error.message}><b className={`xray-error-tag tone-${errorSource(event.error).tone}`}>{errorSource(event.error).label}</b> {event.error.message}</small>}</span></span>
                 <span className="xray-request-model"><strong>{event.model ?? "No model"}</strong><small>{usage.primary} · {usage.secondary}</small></span>
                 <span className="xray-request-cost" title={costUnavailable ? "This request is included in aggregate account billing." : cost?.note}>{cost ? requestCostText(cost) : event.capability === "models" ? "No charge" : "Included"}<small>{cost ? requestCostNote(cost) : event.capability === "models" ? "not billed" : "account billing"}</small></span>
                 <span className="xray-request-latency">{formatLatency(event.latencyMs)}</span>
@@ -608,11 +623,23 @@ export function ApiXray({ open, onClose, models }: ApiXrayProps) {
               <div><small>Latency</small><strong>{formatLatency(selectedEvent.latencyMs)}</strong></div>
               <div><small>HTTP</small><strong>{selectedEvent.statusCode ?? (selectedEvent.status === "running" ? "…" : "N/A")}</strong></div>
             </div>
-            {selectedEvent.error && <section className="xray-error-card">
-              <div><small>Error response</small>{selectedEvent.error.name && <span>{selectedEvent.error.name}</span>}</div>
-              <strong>{selectedEvent.error.message}</strong>
-              {selectedEvent.error.details && <pre><code>{selectedEvent.error.details}</code></pre>}
-            </section>}
+            {selectedEvent.error && (() => {
+              const src = errorSource(selectedEvent.error);
+              return <section className={`xray-error-card tone-${src.tone}`}>
+                <div className="xray-error-top">
+                  <span className={`xray-error-source tone-${src.tone}`}>{src.label}</span>
+                  {selectedEvent.statusCode !== undefined && <code>HTTP {selectedEvent.statusCode}</code>}
+                  {selectedEvent.error.name && <span className="xray-error-name">{selectedEvent.error.name}</span>}
+                </div>
+                <strong>{selectedEvent.error.message}</strong>
+                <p className="xray-error-note">{src.note}</p>
+                {selectedEvent.responseId && <div className="xray-error-reqid"><small>Venice request id</small><code>{selectedEvent.responseId}</code></div>}
+                {selectedEvent.error.details && <>
+                  <div className="xray-error-bodylabel"><small>{src.tone === "venice" ? "Complete Venice response body" : "Details"}</small></div>
+                  <pre><code>{selectedEvent.error.details}</code></pre>
+                </>}
+              </section>;
+            })()}
             <div className="xray-request-url"><b>{selectedEvent.method}</b><code>{selectedEvent.request?.url ?? `https://api.venice.ai/api/v1${selectedEvent.endpoint}`}</code></div>
             <div className="xray-payload-heading"><div><small>Exact request</small><span>Sensitive authorization redacted</span></div><button onClick={() => void copyRequest()}>{copied ? "Copied" : "Copy request"}</button></div>
             <pre className="xray-request-code"><code>{requestText(selectedEvent)}</code></pre>

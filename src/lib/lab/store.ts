@@ -201,6 +201,35 @@ export async function rollbackChampion(approvedBy: string): Promise<ConfigVersio
   });
 }
 
+/**
+ * Undo the most recent rollback by re-promoting the version it demoted. Only
+ * applies when the champion is still where the rollback left it, so a promotion
+ * or another rollback in between disables the undo rather than doing the wrong
+ * thing. Records a normal "promote" so a further rollback stays consistent.
+ */
+export async function undoRollbackChampion(approvedBy: string): Promise<ConfigVersion | undefined> {
+  return serial(async () => {
+    const state = await getConfigState();
+    const lastRollback = [...state.history].reverse().find((record) => record.action === "rollback");
+    if (!lastRollback) return undefined;
+    if (state.championVersionId !== lastRollback.toVersionId) return undefined;
+    const target = state.versions.find((version) => version.versionId === lastRollback.fromVersionId);
+    if (!target) return undefined;
+    state.history.push({
+      action: "promote",
+      fromVersionId: state.championVersionId,
+      toVersionId: target.versionId,
+      proposalId: lastRollback.proposalId,
+      evaluationId: lastRollback.evaluationId,
+      approvedBy,
+      approvedAt: new Date().toISOString(),
+    });
+    state.championVersionId = target.versionId;
+    await atomicWrite(configFile(), state);
+    return target;
+  });
+}
+
 // ── Proposals ──────────────────────────────────────────────────────────────────
 
 export async function listProposals(): Promise<ImprovementProposal[]> {

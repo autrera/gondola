@@ -37,3 +37,6 @@ PLAN.md
 .next/
 node_modules/
 *.tsbuildinfo
+
+# Read-only upstream reference clones for analysis (never shipped)
+references/

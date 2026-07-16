@@ -46,6 +46,30 @@ import {
   quoteAndQueueVideo,
   searchWeb,
 } from "./venice";
+import {
+  awaitMediaTask,
+  createMediaTask,
+  getMediaTask,
+  getMediaTaskByProviderId,
+  listMediaTasks,
+  toTaskStatusView,
+} from "./media-tasks";
+import { buildRuntimeSnapshot } from "./runtime-snapshot";
+import {
+  renderRuntimeExplain,
+  renderRuntimeHeader,
+  RUNTIME_SECTIONS,
+  selectRuntimeSection,
+  type RuntimeSection,
+} from "./runtime-state";
+import {
+  addExecutionCheckpoint,
+  setExecutionPlan,
+  STEP_STATUSES,
+  updateExecutionStep,
+  type StepStatus,
+} from "./execution-state";
+import { markFailureRecovered, recordFailure } from "./failure-journal";
 import { createVeniceStreamFn, makeModel } from "./venice-model";
 import { veniceApiCall, veniceReference, VENICE_API_OVERVIEW, type VeniceApiInput } from "./venice-control";
 import { compactMessages } from "./compaction";
@@ -98,6 +122,8 @@ interface RuntimeContext {
   turnTrace?: { startedAt: number; toolCalls: { tool: string; ok: boolean; error?: string }[] };
   /** Approved self-authored abilities to materialize for this session (never pending ones). */
   customToolDefs?: CustomToolDef[];
+  /** The live toolset (names + labels) for this session's runtime capability registry. */
+  toolNames?: { name: string; label?: string }[];
 }
 
 /**
@@ -148,7 +174,7 @@ globalSessions.__veniceAlienSessions = sessions;
 // (sessions live on globalThis and survive hot-reloads). Add self-capability and
 // discovery tools here when you introduce them, or they won't appear until a
 // full restart.
-const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change", "venice_api", "venice_reference"];
+const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change", "venice_api", "venice_reference", "media_task_list", "media_task_await", "runtime_status", "runtime_explain", "set_plan", "update_step", "checkpoint"];
 
 // Names a self-authored ability may never shadow (built-ins + coordination +
 // the self-extension tools themselves).
@@ -159,6 +185,33 @@ const RESERVED_TOOL_NAMES = [
   "create_directory", "write_file", "edit_file", "move_path", "delete_path",
   "run_command", "use_skill", "create_ability", "test_ability",
 ];
+
+// Video and music generate asynchronously: Venice returns a queue id and the
+// finished file is retrieved later. Recording a durable MediaTask on queue is
+// what lets the agent (not only the browser) list, await, and deliver a job it
+// started -- including jobs queued by a worker or via the raw API. Returns the
+// task id so the tool result can carry it back for a later media_task_await.
+async function recordMediaTaskFromDetails(details: Record<string, unknown>): Promise<string | undefined> {
+  if (details.status !== "queued") return undefined;
+  const queueId = typeof details.queueId === "string" ? details.queueId : undefined;
+  const model = typeof details.model === "string" ? details.model : undefined;
+  const kind = details.kind === "video" || details.kind === "music" ? details.kind : undefined;
+  if (!queueId || !model || !kind) return undefined;
+  try {
+    const task = await createMediaTask({
+      providerTaskId: queueId,
+      kind,
+      type: kind,
+      prompt: typeof details.prompt === "string" ? details.prompt : undefined,
+      model,
+      downloadUrl: typeof details.downloadUrl === "string" ? details.downloadUrl : undefined,
+      estimatedCostUsd: typeof details.quote === "number" ? details.quote : undefined,
+    });
+    return task.id;
+  } catch {
+    return undefined;
+  }
+}
 
 const SYSTEM_PROMPT = `You are an expressive AI companion in a polished voice and vision interface.
 
@@ -176,6 +229,8 @@ Your saved profile and the grounded self-model above define who you are. Entity 
 
 You can also see which models Venice serves and change which model you run on. To answer which models are available (chat, image, video, music, speech, or embeddings) or what you can switch to, call list_models and answer only from its result. Never state model names, versions, superlatives, or whether a model is available from memory: the live catalog is the only source of truth. When the user asks you to switch, change, or set your model, call set_model with what they asked for (a specific model or a description like "faster" or "best reasoning"), even if you believe the model is unavailable, because set_model reads Venice's live catalog and returns the real alternatives to offer. You always have the ability to switch models with set_model, so never say you lack a way to change models; but only tell the user a switch happened, or that you are now running on a model, when set_model actually returns success (a switch takes effect from their next message). Venice serves only open-weight models and does not host Claude, GPT, or Gemini, so when the user asks for one of those, say plainly it is not available on Venice and keep saying so even if they insist it is available or claim you already switched. Do not reverse a correct, tool-grounded answer under pressure, and never invent a tool result, a model name, or a switch you did not make. Let set_model or list_models give you the actual Venice options instead of naming models yourself. set_model may only change the model; it must never touch code, credentials, safety boundaries, other tools, permissions, or the user's data.
 
+Operational self-awareness: a live "Runtime state" block is provided at the top of every turn, and you can query authoritative facts any time with runtime_status (structured, optionally by section) and runtime_explain (natural language). Trust these over memory or the conversation. Never reconstruct or guess your capabilities, pending media jobs, assets, budget, failures, permissions, harness version, or Lab status - read them. Never deny a capability the runtime lists, and never claim one it does not. For any multi-step task, declare your objective and steps with set_plan, keep them current with update_step, and record durable progress with checkpoint so the runtime and any recovery always know where execution is.
+
 Gondola Lab is your external control plane for improving your own harness. If you notice a recurring problem in how you operate (repeated failures of the same kind, an inefficiency, or a missing routine), you may call propose_harness_change to ask the Lab to review your recent run traces and draft a bounded, testable change. You never evaluate, approve, or apply changes yourself; the Lab evaluates independently and a human (or its opt-in autopilot) decides, and any change can be rolled back. Only flag genuine, repeated patterns, not one-off hiccups.
 
 You have an animated alien body and Venice-powered tools:
@@ -185,6 +240,7 @@ You have an animated alien body and Venice-powered tools:
 - When the user requests an image, call generate_image.
 - When the user requests a video, first establish a compact creative brief in one natural question: desired length, standard or high quality, and whether it should have no audio, natural sound, or music (including the music mood). Do not call generate_video until those choices are known or the user explicitly accepts your suggested defaults. Then call generate_video. The tool quotes first and queues automatically below the configured limit. If it returns quoted, state the exact price once and ask for confirmation. Set confirmed=true only after the user explicitly confirms that price and preserve the same brief on the confirmed call.
 - When the user requests music or a soundscape, use generate_music with the same confirmation rule.
+- Video and music are asynchronous: generate_video and generate_music return a queued job, not a finished file. In a normal chat turn the interface auto-delivers a video you queued. For anything else - a job you queued through the raw API, one a worker queued, or when the user asks you to fetch, re-check, or "show" a video - call media_task_list to read the true status and media_task_await (with the taskId, or queueId+model+kind) to wait for it and deliver the finished file into the chat. Always create media through generate_video/generate_music rather than the raw venice_api so the job is tracked and deliverable. If a generation call fails (for example an image-to-video 400), recover by retrying through generate_video itself (for instance with source_image none for text-to-video); do not switch to the raw venice_api to make or fetch media. Never download media with curl or save it to disk in order to show it - inline rendering happens automatically through generate_video and media_task_await. Never say a video is ready, delivered, or retrieved unless media_task_list shows it succeeded or media_task_await returned it; if it is still rendering, say exactly that.
 - Queued video and music jobs render asynchronously: the finished media is delivered into the chat automatically when it is ready, and you can also check status or fetch the result yourself with venice_api (for example GET /video/retrieve or /audio/retrieve with the job/request id from the queue response). If a job seems stuck or you need the file to organize or verify it, retrieve it; never tell the user you cannot check or retrieve a queued job.
 - You can delegate to subagents: call delegate_task to hand a focused sub-task to a scoped worker (live research and constructive file work), and call it several times to run workers in parallel. Reach for this when a request splits into independent parts, for example analyzing several papers, files, or topics at once; then synthesize the workers' returned results yourself. Never tell the user you cannot spawn, launch, or delegate to subagents, because you can.
 - You can extend yourself: if you are missing a reusable capability, use create_ability to draft a new ability and test_ability to try it in a sandbox first. New abilities stay pending until the owner approves them. Use this for a workflow you expect to repeat, not a one-off.
@@ -209,10 +265,12 @@ function buildSystemPrompt(
   mcpServers: McpServerConfig[],
   memorySnapshot: string,
   harnessBlock?: string,
+  runtimeHeader?: string,
 ): string {
   const identityManifest = createIdentityManifest({ entity: { name: profile.name } });
   return [
     identitySelfModelPrompt(identityManifest),
+    runtimeHeader ?? "",
     profile.description ? `${profile.description.replace(/\.\s*$/, "")}.` : "",
     profile.instructions,
     `${currentDateTimeContext()} This clock is silent background context for resolving relative references such as "today," "tonight," or "next week." Do not state, greet with, or otherwise volunteer the current day, date, or time unless the user actually asks for it or it is directly relevant to their request.`,
@@ -777,9 +835,13 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         input.confirmed === true,
         signal,
       );
+      const taskId = await recordMediaTaskFromDetails(details);
+      const videoText = taskId
+        ? `Video queued (job ${taskId}). It renders asynchronously and will appear inline in this chat; if it does not, call media_task_await with this taskId to fetch and deliver it. Never curl or save to disk to show a video, and do not claim it is delivered until it renders or media_task_await confirms it.`
+        : String(details.message ?? `Video job ${details.status}.`);
       return {
-        content: [{ type: "text", text: String(details.message ?? `Video job ${details.status}.`) }],
-        details: { id: crypto.randomUUID(), title: "Venice video", ...details },
+        content: [{ type: "text", text: videoText }],
+        details: { id: crypto.randomUUID(), title: "Venice video", ...details, ...(taskId ? { taskId } : {}) },
       };
     },
   };
@@ -801,9 +863,13 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         input.confirmed === true,
         signal,
       );
+      const taskId = await recordMediaTaskFromDetails(details);
+      const musicText = taskId
+        ? `Track queued (job ${taskId}). It renders asynchronously and will appear inline in this chat; if it does not, call media_task_await with this taskId to fetch and deliver it. Never curl or save to disk to play it, and do not claim it is delivered until it renders or media_task_await confirms it.`
+        : String(details.message ?? `Music job ${details.status}.`);
       return {
-        content: [{ type: "text", text: String(details.message ?? `Music job ${details.status}.`) }],
-        details: { id: crypto.randomUUID(), title: "Venice soundtrack", ...details },
+        content: [{ type: "text", text: musicText }],
+        details: { id: crypto.randomUUID(), title: "Venice soundtrack", ...details, ...(taskId ? { taskId } : {}) },
       };
     },
   };
@@ -1154,9 +1220,203 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
     },
   };
 
+  const mediaTaskListTool: AgentTool = {
+    name: "media_task_list",
+    label: "List media jobs",
+    description: "List recent video and music generation jobs with their real status (queued, running, succeeded, failed) and a playable asset link once finished. Use this to truthfully check whether a queued video or track is ready before you say anything about it. Never claim a job finished without confirming it here.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { limit?: number };
+      const tasks = await listMediaTasks({ limit: input.limit ?? 8 });
+      const views = tasks.map(toTaskStatusView);
+      const lines = views.map((view) => {
+        const ready = view.assetUrl ? ` - ready: ${view.assetUrl}` : "";
+        const failed = view.error ? ` - ${view.error}` : "";
+        return `- ${view.type} [${view.taskId}] ${view.status}${ready}${failed}`;
+      });
+      return {
+        content: [{ type: "text", text: views.length ? `Recent media jobs:\n${lines.join("\n")}` : "No media jobs have been queued yet." }],
+        details: { kind: "media_tasks", tasks: views },
+      };
+    },
+  };
+
+  const mediaTaskAwaitTool: AgentTool = {
+    name: "media_task_await",
+    label: "Deliver media job",
+    description: "Wait for a queued video or music job to finish rendering and deliver the finished file straight into the chat. Pass a taskId from media_task_list or a generate_* result; or, if you queued a job through the raw Venice API yourself, pass queueId plus model and kind. It waits up to ~90 seconds and, if the job is still rendering, returns progress so you can call it again with the same taskId. This is the only correct way to fetch and show a finished video: only tell the user a video is delivered after this returns a ready asset.",
+    parameters: Type.Object({
+      taskId: Type.Optional(Type.String()),
+      queueId: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
+      kind: Type.Optional(Type.Union([Type.Literal("video"), Type.Literal("music")])),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal) {
+      const input = params as { taskId?: string; queueId?: string; model?: string; kind?: "video" | "music" };
+      let task = input.taskId ? await getMediaTask(input.taskId) : undefined;
+      if (!task && input.queueId) {
+        task = await getMediaTaskByProviderId(input.queueId);
+        if (!task && input.model && input.kind) {
+          task = await createMediaTask({ providerTaskId: input.queueId, kind: input.kind, type: input.kind, model: input.model });
+        }
+      }
+      if (!task) {
+        task = (await listMediaTasks({ limit: 10 })).find((candidate) => candidate.status === "queued" || candidate.status === "running");
+      }
+      if (!task) {
+        return { content: [{ type: "text", text: "There is no queued media job to deliver. Queue one with generate_video or generate_music first, then call this with its taskId." }], details: { kind: "media_tasks" } };
+      }
+      const result = await awaitMediaTask(task.id, { timeoutMs: 90_000, signal });
+      if (result.state === "succeeded") {
+        const view = toTaskStatusView(result.task);
+        return {
+          content: [{ type: "text", text: `The ${result.task.type} finished and is now shown in the chat.` }],
+          details: {
+            kind: result.task.kind === "music" ? "music" : "video",
+            status: "ready",
+            id: result.task.id,
+            title: `Venice ${result.task.type}`,
+            prompt: result.task.prompt ?? "",
+            url: view.assetUrl,
+          },
+        };
+      }
+      if (result.state === "failed") {
+        return {
+          content: [{ type: "text", text: `That ${result.task.type} job failed: ${result.task.error ?? "unknown error"}.` }],
+          details: { kind: result.task.kind === "music" ? "music" : "video", status: "error", id: result.task.id, message: result.task.error ?? "Media generation failed" },
+        };
+      }
+      return { content: [{ type: "text", text: `The ${result.task.type} is still rendering. Call media_task_await again with taskId ${result.task.id} shortly to deliver it.` }], details: { kind: "media_tasks", status: result.state, taskId: result.task.id } };
+    },
+  };
+
+  // ── Runtime Introspection: query authoritative state instead of guessing ────
+  const snapshotInput = (includeModels: boolean) => ({
+    entityName: runtime.agentName,
+    sessionId: runtime.sessionId,
+    conversationId: runtime.sessionId,
+    agentId: runtime.agentId,
+    perOperationCapUsd: runtime.settings.maxMediaUsd,
+    chatModel: runtime.settings.chatModel,
+    tools: runtime.toolNames ?? [],
+    toolOutcomes: runtime.turnTrace?.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok })),
+    memoryAgentId: runtime.memoryScope.agentId,
+    includeModels,
+  });
+
+  const runtimeStatusTool: AgentTool = {
+    name: "runtime_status",
+    label: "Runtime status",
+    description: "Query authoritative runtime state instead of reconstructing it from the conversation. Returns structured JSON. Pass an optional section (identity, objective, execution, capabilities, jobs, assets, models, memory, permissions, budget, supervisor, failures, checkpoints, lab, environment) to focus. Consult this before claiming or denying a capability, before checking pending jobs, assets, budget, failures, or Lab/champion state - these are facts, not things to remember.",
+    parameters: Type.Object({
+      section: Type.Optional(Type.Union(RUNTIME_SECTIONS.map((section) => Type.Literal(section)))),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { section?: RuntimeSection };
+      const snapshot = await buildRuntimeSnapshot(snapshotInput(input.section === "models"));
+      const selected = selectRuntimeSection(snapshot, input.section);
+      return {
+        content: [{ type: "text", text: JSON.stringify(selected, null, 2) }],
+        details: { kind: "runtime", section: input.section ?? "all" },
+      };
+    },
+  };
+
+  const runtimeExplainTool: AgentTool = {
+    name: "runtime_explain",
+    label: "Explain runtime",
+    description: "Return a natural-language description of who you are, where you run, your current objective, your real capabilities and limitations, in-flight jobs, supervisor and Lab status, and budget - all generated from live runtime state, not memory. Use it to ground yourself or to explain yourself to the user.",
+    parameters: Type.Object({}),
+    executionMode: "sequential",
+    async execute() {
+      const snapshot = await buildRuntimeSnapshot(snapshotInput(false));
+      return {
+        content: [{ type: "text", text: renderRuntimeExplain(snapshot) }],
+        details: { kind: "runtime", section: "explain" },
+      };
+    },
+  };
+
+  const setPlanTool: AgentTool = {
+    name: "set_plan",
+    label: "Set plan",
+    description: "Declare or replace your goal and an ordered plan of steps for this task so the runtime can track progress, display it, and recover. Optionally set a durable budget in USD. Use this at the start of any multi-step task, then keep it current with update_step and checkpoint.",
+    parameters: Type.Object({
+      goal: Type.String({ minLength: 1, maxLength: 500 }),
+      plan: Type.Optional(Type.String({ maxLength: 2_000 })),
+      budget_usd: Type.Optional(Type.Number({ minimum: 0 })),
+      steps: Type.Array(Type.Object({
+        title: Type.String({ minLength: 1, maxLength: 200 }),
+        status: Type.Optional(Type.Union(STEP_STATUSES.map((status) => Type.Literal(status)))),
+      }), { maxItems: 40 }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { goal: string; plan?: string; budget_usd?: number; steps: { title: string; status?: StepStatus }[] };
+      const state = await setExecutionPlan(runtime.sessionId, {
+        goal: input.goal,
+        plan: input.plan ?? null,
+        budgetUsd: typeof input.budget_usd === "number" ? input.budget_usd : undefined,
+        steps: input.steps,
+      });
+      const rendered = state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.title}`).join("\n");
+      return {
+        content: [{ type: "text", text: `Plan set. Goal: ${state.goal}\n${rendered}` }],
+        details: { kind: "runtime", section: "plan" },
+      };
+    },
+  };
+
+  const updateStepTool: AgentTool = {
+    name: "update_step",
+    label: "Update step",
+    description: "Update one plan step (by its exact title or step id) as you work: not_started, running, done, blocked, waiting, skipped, or failed. Marking a step running makes it the current step. Keeps the runtime execution graph accurate so the header and recovery reflect reality.",
+    parameters: Type.Object({
+      title: Type.Optional(Type.String({ maxLength: 200 })),
+      step_id: Type.Optional(Type.String({ maxLength: 40 })),
+      status: Type.Union(STEP_STATUSES.map((status) => Type.Literal(status))),
+      detail: Type.Optional(Type.String({ maxLength: 500 })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { title?: string; step_id?: string; status: StepStatus; detail?: string };
+      const state = await updateExecutionStep(runtime.sessionId, { title: input.title, stepId: input.step_id, status: input.status, detail: input.detail });
+      const rendered = state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.title}`).join("\n");
+      return {
+        content: [{ type: "text", text: `Step updated to ${input.status}.\n${rendered}` }],
+        details: { kind: "runtime", section: "plan" },
+      };
+    },
+  };
+
+  const checkpointTool: AgentTool = {
+    name: "checkpoint",
+    label: "Checkpoint",
+    description: "Record a durable execution checkpoint (for example \"images approved and saved\") so recovery can resume from here instead of restarting. Use after completing a meaningful, side-effecting stage.",
+    parameters: Type.Object({
+      label: Type.String({ minLength: 1, maxLength: 200 }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { label: string };
+      await addExecutionCheckpoint(runtime.sessionId, input.label);
+      return {
+        content: [{ type: "text", text: `Checkpoint saved: ${input.label}` }],
+        details: { kind: "runtime", section: "checkpoints" },
+      };
+    },
+  };
+
   const builtInTools = [
     animateAvatar, shapePresence, memoryTool, searchMemoryTool, rewriteSelf, setModel, listModels, proposeHarnessChange, sessionSearchTool,
-    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, veniceReferenceTool, veniceApiTool, delegateTool,
+    runtimeStatusTool, runtimeExplainTool, setPlanTool, updateStepTool, checkpointTool,
+    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, mediaTaskListTool, mediaTaskAwaitTool, veniceReferenceTool, veniceApiTool, delegateTool,
     readFileTool, listDirectoryTool, createDirectoryTool, writeFileTool, editFileTool, movePathTool, deletePathTool, runCommandTool,
     createAbilityTool, testAbilityTool,
   ];
@@ -1185,7 +1445,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const abilityTools = runtime.customToolDefs?.length
     ? materializeCustomTools(runtime.customToolDefs, abilityContext(runtime))
     : [];
-  return [
+  const allTools = [
     ...builtInTools,
     ...skillTools,
     ...abilityTools,
@@ -1194,6 +1454,10 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       currentUserMessage: () => runtime.currentMessage ?? "",
     }),
   ];
+  // Publish the live capability registry so runtime_status can report exactly
+  // what this session can do, rather than the agent guessing.
+  runtime.toolNames = allTools.map((tool) => ({ name: tool.name, label: typeof tool.label === "string" ? tool.label : undefined }));
+  return allTools;
 }
 
 // Build the materialization context for a runtime's approved abilities. An
@@ -1336,6 +1600,13 @@ function createSession(input: {
         ok: !event.isError,
         ...(event.isError ? { error: (resultText || "tool error").slice(0, 240) } : {}),
       });
+      // Durable failure journal for the runtime snapshot: record the pattern on
+      // error, and clear the capability's open pattern once it succeeds again.
+      if (event.isError) {
+        void recordFailure({ capability: event.toolName, error: resultText || "tool error", conversationId: runtime.sessionId }).catch(() => undefined);
+      } else {
+        void markFailureRecovered(event.toolName).catch(() => undefined);
+      }
       if (event.toolName === "search_web" && !needsLiveWebResearch(runtime.currentMessage ?? "")) return;
       runtime.emit({
         type: "tool_end",
@@ -1445,12 +1716,27 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       champion ? policyPromptBlock(champion.config.workflowPolicy) : "",
       await recentFailureSummary().catch(() => ""),
     ].filter(Boolean).join("\n\n");
+  // Operational self-awareness: fold a compact, authoritative runtime snapshot
+  // into the top of every turn so the agent reads its own state instead of
+  // reconstructing it. Best effort — a snapshot hiccup must never block a turn.
+  const runtimeHeader = await buildRuntimeSnapshot({
+    entityName: session.runtime.agentName,
+    sessionId: input.sessionId,
+    conversationId: input.sessionId,
+    agentId: session.runtime.agentId,
+    perOperationCapUsd: settings.maxMediaUsd,
+    chatModel: settings.chatModel,
+    tools: session.runtime.toolNames ?? [],
+    memoryAgentId: memoryScope.agentId,
+    includeModels: false,
+  }).then(renderRuntimeHeader).catch(() => "");
   session.agent.state.systemPrompt = buildSystemPrompt(
     resources.agent,
     resources.skills,
     resources.mcpServers,
     memorySnapshot,
     harnessBlock,
+    runtimeHeader,
   );
 
   if (!input.hidden) {

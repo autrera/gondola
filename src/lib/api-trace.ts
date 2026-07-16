@@ -28,8 +28,15 @@ export interface ApiTraceUsage {
   requestUnit?: "characters" | "bytes";
 }
 
+export type ApiTraceErrorSource = "venice" | "timeout" | "cancelled" | "network" | "client" | "unknown";
+
 export interface ApiTraceError {
   name?: string;
+  /** Who produced the failure: Venice upstream ("venice"), a limit Gondola
+   *  imposes ("timeout"), a local cancellation ("cancelled"), the network, a
+   *  Gondola-side problem before the call ("client"), or unknown. Lets the X-Ray
+   *  say explicitly whether Venice rejected the request or we stopped it. */
+  source?: ApiTraceErrorSource;
   message: string;
   details?: string;
 }
@@ -148,6 +155,29 @@ function errorDetails(value: unknown): string | undefined {
     : trimmed;
 }
 
+// Attribute a failure to its true origin so the X-Ray can say plainly whether
+// Venice rejected the request or Gondola stopped it (a timeout, a cancel, a
+// network drop, or a local config problem).
+function classifyErrorSource(error: unknown): ApiTraceErrorSource {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : undefined;
+  const name = error instanceof Error ? error.name : typeof record?.name === "string" ? record.name : "";
+  if (name === "AbortError") return "cancelled";
+  if (name === "TimeoutError") return "timeout";
+  // VeniceError duck-type: a numeric HTTP status + a body field. A null body on a
+  // synthetic error (e.g. a missing API key) is Gondola-side, not a Venice reply.
+  if (record && typeof record.status === "number" && "body" in record) {
+    return record.body == null ? "client" : "venice";
+  }
+  const message = (error instanceof Error ? error.message : String(record?.message ?? "")).toLowerCase();
+  const cause = record?.cause && typeof record.cause === "object" ? record.cause as Record<string, unknown> : undefined;
+  const code = String(cause?.code ?? "").toLowerCase();
+  if (/fetch failed|network|socket|econnrefused|econnreset|enotfound|eai_again|und_err/i.test(message)
+    || /econn|enotfound|eai_again|und_err|etimedout/i.test(code)) {
+    return "network";
+  }
+  return "unknown";
+}
+
 export function describeApiTraceError(error: unknown): ApiTraceError {
   const record = error && typeof error === "object" ? error as Record<string, unknown> : undefined;
   const message = error instanceof Error
@@ -178,7 +208,8 @@ export function describeApiTraceError(error: unknown): ApiTraceError {
   const details = errorDetails(record?.body ?? causeDetails ?? abortContext);
   return {
     ...(error instanceof Error && error.name ? { name: error.name } : {}),
-    message: message.trim().slice(0, 2_000) || "The Venice request failed.",
+    source: classifyErrorSource(error),
+    message: message.trim().slice(0, 4_000) || "The Venice request failed.",
     ...(details && details !== message.trim() ? { details } : {}),
   };
 }
@@ -349,6 +380,7 @@ export function completeApiTrace(
         ...details,
         error: {
           name: "AbortError",
+          source: "cancelled" as const,
           message: "Request was cancelled before completion.",
           details: "This was cancelled locally, not rejected by Venice. Common causes are interrupting the agent, sending a newer message, changing chats, closing voice mode, or the browser disconnecting. No Venice error body exists for a locally cancelled request.",
         },
@@ -373,14 +405,16 @@ export function listApiTraces(): ApiTraceEvent[] {
     event.latencyMs = 90_000;
     event.error = {
       name: "TimeoutError",
-      message: "Trace stopped without a final response after 90 seconds.",
-      details: "The request did not report completion, so API X-ray marked it as aborted locally.",
+      source: "timeout" as const,
+      message: "Gondola stopped waiting after 90s (a Gondola-imposed X-Ray limit, not a Venice error).",
+      details: "The request never reported completion within Gondola's 90-second trace watchdog, so the X-Ray marked it aborted locally. Venice may still have been processing it; this is a limit we impose, not a rejection Venice sent.",
     };
   }
   for (const event of traceState.events) {
     if (event.status !== "aborted" || event.error) continue;
     event.error = {
       name: "AbortError",
+      source: "cancelled" as const,
       message: "Request was cancelled before completion.",
       details: "This was cancelled locally, so Venice did not return an API error body.",
     };

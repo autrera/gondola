@@ -109,7 +109,20 @@ interface SendMessageOptions {
   attachments?: ChatAttachment[];
   fromQueue?: boolean;
   existingUserMessageId?: string;
+  goalTurn?: boolean;
 }
+
+interface GoalState {
+  condition: string;
+  turns: number;
+  reason: string;
+  status: "running" | "achieved" | "capped" | "stopped";
+}
+
+// The /goal inner loop auto-continues the agent after each turn until a separate
+// fast evaluator model confirms the completion condition, capped so a run can
+// never spiral.
+const GOAL_MAX_TURNS = 10;
 
 function queuedChatMessage(item: QueuedMessage): ChatMessage {
   return {
@@ -652,6 +665,10 @@ function Workspace() {
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const [artifacts, setArtifacts] = useState<MediaArtifact[]>([]);
   const [input, setInput] = useState("");
+  const [goal, setGoal] = useState<GoalState | null>(null);
+  const goalActiveRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const sendMessageRef = useRef<((rawMessage: string, options?: SendMessageOptions) => Promise<void>) | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string>();
   const [editDraft, setEditDraft] = useState("");
   const [toolLabel, setToolLabel] = useState("");
@@ -892,12 +909,16 @@ function Workspace() {
   // (then it scrolls). Keeps multi-line writing comfortable instead of a fixed
   // one-line box. Runs whenever the input changes, including when it is cleared
   // after sending (which shrinks it back to one line).
-  useEffect(() => {
+  const resizeComposer = useCallback(() => {
     const element = composerRef.current;
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
-  }, [input]);
+  }, []);
+
+  useEffect(() => {
+    resizeComposer();
+  }, [input, resizeComposer]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -2080,7 +2101,7 @@ function Workspace() {
   const sendMessage = useCallback(async (rawMessage: string, options: SendMessageOptions = {}) => {
     const message = rawMessage.trim();
     const outgoingAttachments = options.attachments ?? [];
-    if ((!message && !outgoingAttachments.length) || !sessionId || (isBusy && options.hidden)) {
+    if ((!message && !outgoingAttachments.length) || !sessionId || (isBusy && options.hidden && !options.goalTurn)) {
       if (!sessionId && (message || outgoingAttachments.length)) setConnectionError("Your conversation is still loading. Try again in a moment.");
       if (options.hidden) cameraGreetingInFlightRef.current = false;
       return;
@@ -2538,6 +2559,97 @@ function Workspace() {
       }
     }
   }, [activeAgentId, agentName, cameraOn, captureFrame, clearConversationRunning, clearSpeechQueue, handleToolResult, isBusy, markConversationRunning, queueSpeech, refreshWorkspace, sessionId, settings, settleSpeechPhase, updateMessageQueue, voiceOn]);
+
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
+
+  // Ask a separate fast model whether the goal condition is met, based only on
+  // the recent visible conversation. Failures are non-fatal: the loop simply
+  // continues so a flaky check never strands an in-progress goal.
+  const evaluateGoal = useCallback(async (condition: string): Promise<{ met: boolean; reason: string }> => {
+    try {
+      const transcript = messagesRef.current
+        .filter((item) => item.text && !item.streaming)
+        .slice(-12)
+        .map((item) => `${item.role === "user" ? "User" : agentName}: ${stripInlinedAttachments(item.text).slice(0, 1200)}`)
+        .join("\n\n");
+      const response = await fetch("/api/goal/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ condition, transcript }),
+      });
+      if (!response.ok) return { met: false, reason: "Could not check the goal; continuing." };
+      const data = (await response.json()) as { met?: boolean; reason?: string };
+      return { met: data.met === true, reason: (data.reason ?? "").trim() || (data.met ? "Goal met." : "Not met yet.") };
+    } catch {
+      return { met: false, reason: "Goal check failed; continuing." };
+    }
+  }, [agentName]);
+
+  const stopGoal = useCallback(() => {
+    goalActiveRef.current = false;
+    requestAbortRef.current?.abort();
+    setGoal((current) => current && current.status === "running" ? { ...current, status: "stopped", reason: "Stopped." } : current);
+  }, []);
+
+  // The inner loop: run a turn, have a separate model check the condition, and
+  // either finish or feed the reason back as guidance for the next turn.
+  const runGoal = useCallback(async (condition: string) => {
+    if (goalActiveRef.current) return;
+    goalActiveRef.current = true;
+    setConnectionError("");
+    setGoal({ condition, turns: 0, reason: "Starting…", status: "running" });
+    let turns = 0;
+    let directive = `Work toward this goal until it is fully met, taking whatever steps are needed: ${condition}`;
+    try {
+      while (goalActiveRef.current && turns < GOAL_MAX_TURNS) {
+        await sendMessageRef.current?.(directive, { hidden: true, goalTurn: true });
+        turns += 1;
+        if (!goalActiveRef.current) break;
+        setGoal((current) => current ? { ...current, turns, reason: "Checking the goal…" } : current);
+        const verdict = await evaluateGoal(condition);
+        if (!goalActiveRef.current) break;
+        if (verdict.met) {
+          setGoal({ condition, turns, reason: verdict.reason, status: "achieved" });
+          goalActiveRef.current = false;
+          return;
+        }
+        setGoal((current) => current ? { ...current, turns, reason: verdict.reason } : current);
+        directive = `The goal is not met yet. Evaluator feedback: ${verdict.reason}. Keep working toward this goal: ${condition}`;
+      }
+      if (goalActiveRef.current) {
+        setGoal((current) => current ? { ...current, status: "capped", reason: `Stopped after ${turns} turns without meeting the goal.` } : current);
+      }
+    } catch {
+      setGoal((current) => current ? { ...current, status: "stopped", reason: "The goal run hit an error." } : current);
+    } finally {
+      goalActiveRef.current = false;
+    }
+  }, [evaluateGoal]);
+
+  // Composer entry point: intercept /goal commands, otherwise send normally. A
+  // manual message during an active goal hands control back to the user.
+  const handleComposerSubmit = useCallback((text: string, submitAttachments: ChatAttachment[]) => {
+    const trimmed = text.trim();
+    const lower = trimmed.toLowerCase();
+    if (lower === "/goal clear" || lower === "/goal stop" || lower === "/goal off") {
+      stopGoal();
+      setGoal(null);
+      setInput("");
+      return;
+    }
+    const goalMatch = trimmed.match(/^\/goal\s+([\s\S]+)/i);
+    if (goalMatch) {
+      setInput("");
+      void runGoal(goalMatch[1].trim());
+      return;
+    }
+    if (goalActiveRef.current) {
+      stopGoal();
+      setGoal(null);
+    }
+    void sendMessage(text, { attachments: submitAttachments });
+  }, [runGoal, sendMessage, stopGoal]);
 
   useEffect(() => {
     if (!sessionId || isBusy || runningConversations.includes(sessionId)) return;
@@ -3561,7 +3673,7 @@ function Workspace() {
                   <span>{message.role === "assistant" ? agentName : "You"}</span>
                   {message.streaming && <span className="typing-dots"><i /><i /><i /></span>}
                 </div>
-                <div className={!message.text && message.streaming ? "message-status" : undefined}>
+                <div className={`message-body${!message.text && message.streaming ? " message-status" : ""}`}>
                   {message.attachments?.length ? (
                     <div className="message-attachments">
                       {message.attachments.map((attachment, index) => (
@@ -3750,6 +3862,24 @@ function Workspace() {
             </div>
           )}
 
+          {goal && (
+            <div className={`goal-banner goal-${goal.status}`}>
+              <span className="goal-dot" aria-hidden="true" />
+              <div className="goal-copy">
+                <strong>
+                  {goal.status === "running" ? `Goal active · turn ${goal.turns}/${GOAL_MAX_TURNS}`
+                    : goal.status === "achieved" ? "Goal achieved"
+                    : goal.status === "capped" ? "Goal stopped · turn limit"
+                    : "Goal stopped"}
+                </strong>
+                <small>{goal.status === "running" ? goal.condition : goal.reason}</small>
+              </div>
+              {goal.status === "running"
+                ? <button type="button" className="goal-stop" onClick={stopGoal}>Stop</button>
+                : <button type="button" className="goal-stop" onClick={() => setGoal(null)} aria-label="Dismiss goal">×</button>}
+            </div>
+          )}
+
           <form
             className={`composer ${attachmentDropActive ? "is-dropping-files" : ""}`}
             onSubmit={(event) => {
@@ -3759,7 +3889,7 @@ function Workspace() {
                 recorderRef.current.stop();
                 return;
               }
-              void sendMessage(input, { attachments });
+              handleComposerSubmit(input, attachments);
             }}
             onDragEnter={(event) => {
               if (!event.dataTransfer.types.includes("Files")) return;
@@ -3824,6 +3954,7 @@ function Workspace() {
               ref={composerRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onInput={resizeComposer}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -3832,7 +3963,7 @@ function Workspace() {
                     recorderRef.current.stop();
                     return;
                   }
-                  void sendMessage(input, { attachments });
+                  handleComposerSubmit(input, attachments);
                 }
               }}
               placeholder={`Message ${agentName}…`}
