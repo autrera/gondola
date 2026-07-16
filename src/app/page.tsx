@@ -675,6 +675,7 @@ function Workspace() {
   const [attachmentDropActive, setAttachmentDropActive] = useState(false);
   const attachmentDragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>(FEATURES.agentsTab ? "agents" : "chats");
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<WorkspaceSnapshot>();
@@ -886,6 +887,17 @@ function Workspace() {
   useEffect(() => {
     if (workspaceOpen) void refreshWorkspace();
   }, [refreshWorkspace, workspaceOpen]);
+
+  // Auto-grow the composer as you type multiple lines, up to the CSS max-height
+  // (then it scrolls). Keeps multi-line writing comfortable instead of a fixed
+  // one-line box. Runs whenever the input changes, including when it is cleared
+  // after sending (which shrinks it back to one line).
+  useEffect(() => {
+    const element = composerRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
+  }, [input]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -3802,6 +3814,7 @@ function Workspace() {
               </div>
             )}
             <textarea
+              ref={composerRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
