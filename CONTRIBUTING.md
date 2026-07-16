@@ -6,7 +6,7 @@ This guide covers how to set up the project, the checks to run before opening a 
 
 ## Ground rules
 
-- **Venice is the only model provider.** Every model capability (chat, vision, transcription, speech, web search, image, video, music, embeddings) must go through the Venice API. Please do not add other inference providers.
+- **Venice is Gondola's default and only bundled full-capability provider in V1.** Future provider adapters may override individual capabilities, but they must preserve Gondola's privacy, safety, permissions, cancellation, observability, and evaluation guarantees. All provider-aware code must resolve through the provider registry and capability routes (`src/lib/providers/`), never ad-hoc provider conditionals.
 - **Keep it local-first and private.** User data (conversations, memory, transcripts, vectors, keys) stays on the user's machine under `.gondola/` and `.env.local`. Never send it anywhere else, and never commit it.
 - **No secrets in the repo.** `.env.local`, `.gondola/`, and personal exports are git-ignored. Double-check `git status` before committing.
 
@@ -24,6 +24,8 @@ npm install --ignore-scripts
 cp .env.example .env.local   # then add your VENICE_API_KEY
 ```
 
+First run launches a guided setup that verifies your Venice key and enables capabilities, so no manual `.env.local` is required. See [Setup and credentials](#setup-and-credentials).
+
 Run the web companion:
 
 ```bash
@@ -35,6 +37,17 @@ Run the terminal harness:
 ```bash
 npm run harness
 ```
+
+## Setup and credentials
+
+Gondola V1 uses **Venice** as its default, bundled, full-capability provider. Every V1 capability (conversation, reasoning, vision, search, transcription, speech, images, video, music, and embeddings) runs through Venice.
+
+- **Consumer setup (recommended).** On first run Gondola shows a guided onboarding wizard (web) or `gondola setup` (terminal). It verifies your Venice key against the live model catalog, runs a minimal real completion, derives capability defaults from the catalog, and only then marks setup ready. The key is saved locally with owner-only permissions.
+- **Developer setup.** Export `VENICE_API_KEY` or put it in `.env.local` to skip the wizard. `VENICE_ADMIN_KEY` (optional) is used only for billing and usage endpoints.
+- **Credential precedence.** A deliberate local override wins; otherwise the environment variable (`VENICE_API_KEY`) wins; otherwise the local credential file. Removing the local credential falls back to the environment key when present.
+- **Where things are stored.** Secrets live in `~/.gondola/credentials.json` (file `0600`, directory `0700`) or the environment, never in the browser, chat history, traces, assets, Lab records, or logs. Non-secret verification state (timestamp, masked suffix, capability defaults) lives in `~/.gondola/setup.json`; web UI preferences stay in browser `localStorage`; runtime app state stays under the project `.gondola/`.
+- **Repair or reset.** Re-run `gondola setup`, `gondola doctor`, or Settings, Providers, Test connection to re-verify and refresh discovery without erasing anything. `gondola setup --reset` clears the local credential and verification after confirmation.
+- **Capabilities and providers.** Every V1 capability requires Venice. Future providers will be capability-specific overrides resolved through the provider registry (`src/lib/providers/`) and capability routes, not an all-or-nothing switch.
 
 ## Before you open a pull request
 

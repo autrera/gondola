@@ -2,9 +2,12 @@ import { loadEnv } from "./env";
 import { createHarness } from "./harness";
 import { HarnessRenderer } from "./render";
 import { runOneShot, startInteractive } from "./repl";
+import { ensureSetupForRun, runSetupCommand } from "./setup";
 import { theme } from "./theme";
 
 loadEnv();
+
+const SETUP_COMMANDS = new Set(["setup", "provider", "doctor"]);
 
 // Don't crash if the reader (e.g. `| head`) closes the pipe early.
 process.stdout.on("error", (error: NodeJS.ErrnoException) => {
@@ -18,9 +21,20 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  if (!process.env.VENICE_API_KEY) {
-    console.error(theme.red("VENICE_API_KEY is not set."));
-    console.error(theme.dim("Add it to .env.local (see .env.example) or export it, then run again."));
+  const args = process.argv.slice(2);
+
+  // Guided setup / diagnostics: `gondola setup|provider|doctor` (nova aliases work too).
+  if (args.length > 0 && SETUP_COMMANDS.has(args[0])) {
+    process.exit(await runSetupCommand(args[0], args.slice(1)));
+  }
+
+  const argvPrompt = args.join(" ").trim();
+  // Interactive only when attached to a TTY with no one-shot prompt to run.
+  const interactive = !argvPrompt && process.stdin.isTTY;
+
+  // First-run gate. Interactive sessions get the guided flow; non-interactive
+  // runs never prompt and fail with a clear, actionable message + nonzero exit.
+  if (!(await ensureSetupForRun({ interactive }))) {
     process.exit(1);
   }
 
@@ -29,7 +43,6 @@ async function main(): Promise<void> {
 
   // Dispatch: `nova "prompt"` (argv) and piped stdin run one-shot and exit;
   // an attached TTY starts the interactive loop.
-  const argvPrompt = process.argv.slice(2).join(" ").trim();
   if (argvPrompt) {
     process.exit(await runOneShot(harness, renderer, argvPrompt));
   }

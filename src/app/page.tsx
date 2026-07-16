@@ -31,6 +31,7 @@ import { ModelPicker } from "@/components/ModelPicker";
 import { SettingsDrawer } from "@/components/SettingsDrawer";
 import { WorkspaceDrawer, type WorkspaceTab } from "@/components/WorkspaceDrawer";
 import { ConversationSearch } from "@/components/ConversationSearch";
+import { Onboarding, type SetupStatusView } from "@/components/Onboarding";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_PRESENCE,
@@ -642,7 +643,7 @@ function SubAgentCard({ run }: { run: SubAgentRun }) {
   );
 }
 
-export default function Home() {
+function Workspace() {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [action, setAction] = useState<AvatarAction>("neutral");
@@ -990,6 +991,20 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem("nova-settings", JSON.stringify(settings));
   }, [settings]);
+
+  // After onboarding, pre-fill the composer with the suggested first message so
+  // the user can meet Gondola with a single send.
+  useEffect(() => {
+    try {
+      const intro = localStorage.getItem("nova-onboarding-intro");
+      if (intro) {
+        setInput(intro);
+        localStorage.removeItem("nova-onboarding-intro");
+      }
+    } catch {
+      // localStorage may be unavailable; not critical.
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -3855,4 +3870,42 @@ declare global {
   interface Window {
     webkitAudioContext?: typeof AudioContext;
   }
+}
+
+// First-run gate. The workspace (and its heavy camera/audio/session hooks) only
+// mounts once setup is verified "ready"; otherwise the onboarding wizard runs.
+function OnboardingGate() {
+  const [status, setStatus] = useState<SetupStatusView | undefined>(undefined);
+  const [checked, setChecked] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/setup/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((body: SetupStatusView) => {
+        if (cancelled) return;
+        setStatus(body);
+        setReady(body.state === "ready");
+      })
+      .catch(() => { if (!cancelled) setStatus(undefined); })
+      .finally(() => { if (!cancelled) setChecked(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!checked) {
+    return (
+      <div className="onb-splash" aria-busy="true">
+        <span className="onb-splash-mark">Gondola</span>
+      </div>
+    );
+  }
+  if (!ready) {
+    return <Onboarding initialStatus={status} onReady={() => setReady(true)} />;
+  }
+  return <Workspace />;
+}
+
+export default function Home() {
+  return <OnboardingGate />;
 }
