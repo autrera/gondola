@@ -153,19 +153,19 @@ export function ProvidersPanel() {
       {replacing && (
         <label className="settings-field">
           <span className="field-heading"><span>New Venice key</span><small>Overrides the environment key</small></span>
-          <input type="password" autoComplete="off" spellCheck={false} placeholder="sk-…" value={newKey} onChange={(event) => setNewKey(event.target.value)} />
+          <input type="password" autoComplete="off" spellCheck={false} placeholder="Venice inference key" value={newKey} onChange={(event) => setNewKey(event.target.value)} />
         </label>
       )}
 
       <div className="prov-actions">
-        <button className="prov-btn" disabled={busy !== ""} onClick={testConnection}>{busy === "test" ? "Testing…" : "Test connection"}</button>
-        <button className="prov-btn" disabled={busy !== ""} onClick={runDiagnostics}>{busy === "diagnose" ? "Running…" : "Run diagnostics"}</button>
-        <button className="prov-btn" disabled={busy !== ""} onClick={rediscover}>{busy === "discover" ? "Discovering…" : "Re-run model discovery"}</button>
-        <button className="prov-btn" disabled={busy !== ""} onClick={resetRoutes}>{busy === "reset" ? "Resetting…" : "Reset routes to defaults"}</button>
+        <button className="prov-btn" disabled={busy !== ""} onClick={testConnection}>{busy === "test" ? "Testing…" : "Test"}</button>
+        <button className="prov-btn" disabled={busy !== ""} onClick={runDiagnostics}>{busy === "diagnose" ? "Diagnosing…" : "Diagnose"}</button>
+        <button className="prov-btn" disabled={busy !== ""} onClick={rediscover}>{busy === "discover" ? "Discovering…" : "Rediscover"}</button>
+        <button className="prov-btn" disabled={busy !== ""} onClick={resetRoutes}>{busy === "reset" ? "Resetting…" : "Reset routes"}</button>
         {replacing
-          ? <button className="prov-btn is-primary" disabled={busy !== ""} onClick={saveNewKey}>{busy === "replace" ? "Saving…" : "Save new key"}</button>
-          : <button className="prov-btn" disabled={busy !== ""} onClick={() => setReplacing(true)}>Replace local credential</button>}
-        {cred?.hasFile && <button className="prov-btn is-danger" disabled={busy !== ""} onClick={removeCredential}>{busy === "remove" ? "Removing…" : "Remove local credential"}</button>}
+          ? <button className="prov-btn is-primary" disabled={busy !== ""} onClick={saveNewKey}>{busy === "replace" ? "Saving…" : "Save"}</button>
+          : <button className="prov-btn" disabled={busy !== ""} onClick={() => setReplacing(true)}>Replace</button>}
+        {cred?.hasFile && <button className="prov-btn is-danger" disabled={busy !== ""} onClick={removeCredential}>{busy === "remove" ? "Removing…" : "Remove"}</button>}
       </div>
 
       {note && <p className="prov-note">{note}</p>}

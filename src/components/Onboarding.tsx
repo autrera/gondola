@@ -233,7 +233,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
                 type="password"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="sk-…"
+                placeholder="Venice inference key"
                 value={apiKey}
                 disabled={busy}
                 onChange={(event) => setApiKey(event.target.value)}
@@ -249,7 +249,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
               {busy
                 ? <button className="onb-secondary" onClick={cancelVerify}>Cancel</button>
                 : <button className="onb-link" onClick={() => setScreen("connect")}>Back</button>}
-              <button className="onb-primary" disabled={busy || !apiKey.trim()} onClick={() => void submitKey()}>Verify & continue</button>
+              <button className="onb-primary" disabled={busy || !apiKey.trim()} onClick={() => void submitKey()}>Verify</button>
             </div>
           </section>
         )}
