@@ -48,6 +48,7 @@ import {
   type WorkspaceSnapshot,
 } from "@/lib/app-types";
 import { needsLiveWebResearch } from "@/lib/conversation";
+import { FEATURES } from "@/lib/features";
 import { supportedReasoningEfforts } from "@/lib/model-capabilities";
 import { removeEmDashes } from "@/lib/text-style";
 import { takeEarlySpeechSegment } from "@/lib/voice-latency";
@@ -678,7 +679,7 @@ export default function Home() {
   const attachmentDragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("agents");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>(FEATURES.agentsTab ? "agents" : "chats");
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<WorkspaceSnapshot>();
   const [activeAgentId, setActiveAgentId] = useState("");
   const [voiceModeOpen, setVoiceModeOpen] = useState(false);
@@ -3270,6 +3271,7 @@ export default function Home() {
               onActiveChange={setChatSearchActive}
             />
           </div>
+          {FEATURES.agentsTab && (
           <div className="sidebar-section">
             <div className="sidebar-section-head">
               <span className="sidebar-section-label">Agents</span>
@@ -3291,6 +3293,7 @@ export default function Home() {
                 : <p className="sidebar-empty">Loading agents…</p>}
             </div>
           </div>
+          )}
 
           <div className="sidebar-section">
             <span className="sidebar-section-label">Chats</span>
