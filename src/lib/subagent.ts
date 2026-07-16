@@ -110,7 +110,9 @@ export async function runSubAgent(input: SubAgentInput): Promise<SubAgentResult>
       tools: scopedTools,
       messages: [],
     },
-    streamFn: createVeniceStreamFn(20_000),
+    // Sub-agents do real, sometimes slow work (research, analysis); give them the
+    // same generous per-model budget as the main turn instead of a tight 20s.
+    streamFn: createVeniceStreamFn(),
     toolExecution: "parallel",
     maxRetryDelayMs: 2_500,
     onPayload: (payload) => {

@@ -1445,8 +1445,15 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         const addedMessages = session.agent.state.messages.slice(priorMessages.length);
         unansweredUserMessage = addedMessages.find((message) => message.role === "user")
           ?? unansweredUserMessage;
+        const usedTools = addedMessages.some((message) => message.role === "assistant"
+          && message.content.some((part) => part.type === "toolCall"));
         session.agent.state.messages = priorMessages;
-        throw error;
+        // A user cancellation stops the turn. If a tool already ran, another model
+        // must not replay it. Anything else (timeout, transient model or network
+        // error) falls through to the next candidate instead of failing the turn.
+        if (input.signal?.aborted || usedTools) throw error;
+        lastError = error instanceof Error && error.message ? error.message : `Venice model ${model} failed to respond.`;
+        continue;
       }
       const addedMessages = session.agent.state.messages.slice(priorMessages.length);
       unansweredUserMessage = addedMessages.find((message) => message.role === "user")
@@ -1522,9 +1529,11 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.name] : []))
         : []);
       session.agent.state.messages = priorMessages;
-      // Once any tool has run, another model must not replay the turn. Tool
-      // calls can spend money or mutate local and external state.
-      if (usedTools.length || /timed?\s*out|timeout|aborted/i.test(lastError)) break;
+      // Once any tool has run, another model must not replay the turn (tool calls
+      // can spend money or mutate local and external state). Every other failure,
+      // including a timeout, falls through to the next candidate; a genuine user
+      // cancellation is caught at the top of the loop and stops it there.
+      if (usedTools.length) break;
     }
   } catch (error) {
     if (!input.hidden) {
