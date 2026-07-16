@@ -134,6 +134,10 @@ const CSS = `
 .gl-notice { margin: 8px 20px 0; padding: 9px 12px; border: 1px solid rgba(159,183,210,.24); border-radius: 10px; color: #c4cbd4; font-size: 12px; background: rgba(159,183,210,.06); }
 .gl-live-toggle { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 11.5px; cursor: pointer; }
 .gl-live-toggle input { accent-color: var(--mint); }
+.gl-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--faint); background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; cursor: pointer; transition: color .14s, border-color .14s; }
+.gl-id:hover { color: var(--ink); border-color: var(--line-bright); }
+.gl-tile.attn { border-color: rgba(139,191,157,.4); background: rgba(139,191,157,.05); }
+.gl-loading { display: grid; place-items: center; height: 100%; min-height: 240px; color: var(--faint); font-size: 13px; }
 `;
 
 const STATUS_LABEL: Record<string, string> = {
@@ -185,6 +189,25 @@ function describeSetup(policy?: WorkflowPolicy): string[] {
   ];
 }
 
+function copyText(value: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard) void navigator.clipboard.writeText(value);
+}
+
+// Copyable identifier chip (DX): shows a short id, copies the full value on click.
+function IdChip({ label, value }: { label?: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="gl-id"
+      title={`Copy ${value}`}
+      onClick={() => { copyText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1200); }}
+    >
+      {label ? `${label} ` : ""}{copied ? "copied" : value.slice(0, 8)}
+    </button>
+  );
+}
+
 export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaLabProps) {
   const [snapshot, setSnapshot] = useState<LabSnapshot | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
@@ -195,7 +218,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [approver, setApprover] = useState("");
+  const [approver, setApprover] = useState<string>(() => (typeof window !== "undefined" ? window.localStorage.getItem("gl-approver") ?? "" : ""));
   const [live, setLive] = useState(false);
   const [abilities, setAbilities] = useState<Ability[]>([]);
 
@@ -280,7 +303,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
       setTab("experiments");
       setSelected(payload.proposal.proposalId);
     } else {
-      setNotice("Nothing new to test right now. Every pattern the Lab has seen is already being tested or doesn't have enough evidence yet — let Entity run more tasks and check back.");
+      setNotice("Nothing new to test right now. Every pattern the Lab has seen is already being tested or does not have enough evidence yet. Let Entity run more tasks and check back.");
     }
   }, [act]);
 
@@ -290,6 +313,19 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Remember the approver name across sessions so it never has to be retyped.
+  useEffect(() => {
+    if (typeof window !== "undefined" && approver.trim()) window.localStorage.setItem("gl-approver", approver.trim());
+  }, [approver]);
+
+  // Open a tab straight into its first item so the detail pane is never empty.
+  useEffect(() => {
+    if (!snapshot) return;
+    if (tab === "experiments" && !selected && snapshot.proposals[0]) setSelected(snapshot.proposals[0].proposalId);
+    if (tab === "runs" && !selectedTrace && snapshot.traces[0]) setSelectedTrace(snapshot.traces[0].runId);
+    if (tab === "abilities" && !selectedAbility && abilities[0]) setSelectedAbility(abilities[0].id);
+  }, [tab, snapshot, abilities, selected, selectedTrace, selectedAbility]);
 
   if (!open) return null;
 
@@ -317,7 +353,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
     { id: "overview", label: "Overview" },
     { id: "experiments", label: "Experiments", badge: readyCount || undefined },
     { id: "runs", label: "Runs" },
-    { id: "setup", label: "Setup & history" },
+    { id: "setup", label: "Setup and history" },
     { id: "abilities", label: "Abilities", badge: pendingAbilities.length || undefined },
   ];
 
@@ -332,7 +368,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
           <div className="gl-titles">
             <span className="gl-kicker">Gondola Lab</span>
             <h2>Research on Entity</h2>
-            <p>A research lab with one subject. It watches Entity work, forms ideas from what recurs, tests them against the current setup, and adopts only what proves out — with your approval.</p>
+            <p>A research lab with one subject: Entity. It finds what recurs, tests improvements against the current setup, and adopts only what proves out, with your approval.</p>
           </div>
           <button className="gl-close" onClick={onClose} aria-label="Close Gondola Lab"><CloseIcon size={16} /></button>
         </header>
@@ -349,12 +385,16 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
         {notice ? <div className="gl-notice">{notice}</div> : null}
 
         <div className="gl-content">
-          {/* ── Overview ─────────────────────────────────────────── */}
+          {!snapshot ? (
+            <div className="gl-loading">Loading the Lab</div>
+          ) : (
+          <>
+          {/* Overview */}
           {tab === "overview" && (
             nothingYet ? (
               <div className="gl-empty">
                 <div className="gl-empty-inner">
-                  <p>The Lab hasn&apos;t watched Entity work yet, so there&apos;s nothing to study.</p>
+                  <p>The Lab has not watched Entity work yet, so there is nothing to study.</p>
                   <p className="muted">Let Entity run some tasks, or load a few sample runs to explore how the Lab works.</p>
                   <button className="gl-btn primary" disabled={Boolean(busy)} onClick={() => { void act("seed_demo").then(() => setNotice("Loaded sample runs. Try \u201cLook for improvements\u201d to see the Lab propose a test.")); }}>Load sample data</button>
                 </div>
@@ -362,12 +402,12 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             ) : (
               <div className="gl-page">
                 <div className="gl-tiles">
-                  <button className="gl-tile" onClick={() => setTab("experiments")}><b className={readyCount ? "good" : ""}>{readyCount}</b><span>Ready to review</span></button>
+                  <button className={`gl-tile${readyCount ? " attn" : ""}`} onClick={() => setTab("experiments")}><b className={readyCount ? "good" : ""}>{readyCount}</b><span>Ready to review</span></button>
                   <button className="gl-tile" onClick={() => setTab("experiments")}><b>{progressCount}</b><span>In progress</span></button>
                   <button className="gl-tile" onClick={() => setTab("experiments")}><b>{adoptedCount}</b><span>Adopted changes</span></button>
                   <button className="gl-tile" onClick={() => setTab("experiments")}><b>{rejectedCount}</b><span>Ruled out</span></button>
                   <button className="gl-tile" onClick={() => setTab("runs")}><b>{traces.length}</b><span>Runs recorded</span></button>
-                  <button className="gl-tile" onClick={() => setTab("abilities")}><b className={pendingAbilities.length ? "good" : ""}>{pendingAbilities.length}</b><span>Abilities awaiting you</span></button>
+                  <button className={`gl-tile${pendingAbilities.length ? " attn" : ""}`} onClick={() => setTab("abilities")}><b className={pendingAbilities.length ? "good" : ""}>{pendingAbilities.length}</b><span>Abilities awaiting you</span></button>
                 </div>
 
                 <div className="gl-card">
@@ -388,14 +428,14 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                     ))}
                   </div>
                   <div className="gl-cta" style={{ marginTop: 12 }}>
-                    <button className="gl-btn small ghost" onClick={() => setTab("setup")}>View setup &amp; history</button>
+                    <button className="gl-btn small ghost" onClick={() => setTab("setup")}>View setup and history</button>
                   </div>
                 </div>
               </div>
             )
           )}
 
-          {/* ── Experiments ──────────────────────────────────────── */}
+          {/* Experiments */}
           {tab === "experiments" && (
             <div className="gl-split">
               <div className="gl-list">
@@ -415,7 +455,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                       <TrashIcon size={14} />
                     </button>
                   </div>
-                )) : <p className="muted" style={{ margin: "6px" }}>No experiments yet. Use &ldquo;Look for improvements&rdquo; to create one.</p>}
+                )) : <p className="muted" style={{ margin: "6px" }}>No experiments yet. Use the Look for improvements button to create one.</p>}
               </div>
 
               <div className="gl-detail">
@@ -431,6 +471,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                     <h4>The idea</h4>
                     <p className="muted">{proposal.hypothesis}</p>
                     <p className="muted">Based on {proposal.traceEvidence.length} run(s) · aims to improve {proposal.targetMetric.replace(/_/g, " ")} · {proposal.riskLevel} risk</p>
+                    <p className="muted">Created {new Date(proposal.createdAt).toLocaleString()}{detail?.evaluation ? <> · evaluation <IdChip value={detail.evaluation.evaluationId} /> · seed {detail.evaluation.seed}</> : null}</p>
                     {proposal.proposerFeedback ? <p className="muted">Prior context: {proposal.proposerFeedback}</p> : null}
 
                     <h4>What would change</h4>
@@ -491,7 +532,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             </div>
           )}
 
-          {/* ── Runs ─────────────────────────────────────────────── */}
+          {/* Runs */}
           {tab === "runs" && (
             <div className="gl-split">
               <div className="gl-list">
@@ -519,7 +560,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                         <tr><td>Quality (judge)</td><td>{selectedTraceData.quality.toFixed(1)} / 10</td></tr>
                         <tr><td>Cost</td><td>${selectedTraceData.costUsd.toFixed(2)}</td></tr>
                         <tr><td>Human interventions</td><td>{selectedTraceData.humanInterventions}</td></tr>
-                        <tr><td>Run id</td><td>{selectedTraceData.runId.slice(0, 12)}</td></tr>
+                        <tr><td>Run id</td><td><IdChip value={selectedTraceData.runId} /></td></tr>
                       </tbody>
                     </table>
                     <p className="muted" style={{ marginTop: 12 }}>These runs are the raw evidence the Lab studies. Recurring problems across runs become experiments.</p>
@@ -529,12 +570,13 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             </div>
           )}
 
-          {/* ── Setup & history ──────────────────────────────────── */}
+          {/* Setup and history */}
           {tab === "setup" && (
             <div className="gl-page">
               <div className="gl-card">
                 <h3>Current setup</h3>
-                <p className="sub">What Entity uses right now · version {versionName(champion?.versionId)}{champion?.changeSummary ? ` · ${champion.changeSummary}` : ""}</p>
+                <p className="sub">What Entity uses right now{champion?.changeSummary ? ` · ${champion.changeSummary}` : ""}</p>
+                {champion ? <div style={{ margin: "0 0 10px" }}><IdChip label="version" value={champion.versionId} /></div> : null}
                 <div className="gl-facts">
                   {describeSetup(policy).map((fact) => (
                     <div key={fact} className="gl-fact"><i />{fact}</div>
@@ -557,7 +599,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                       </div>
                     ))}
                   </div>
-                ) : <p className="muted">No changes yet — Entity is on the original setup.</p>}
+                ) : <p className="muted">No changes yet. Entity is on the original setup.</p>}
 
                 {(canRevert || canUndoRevert) && (
                   <div className="gl-actions">
@@ -570,7 +612,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             </div>
           )}
 
-          {/* ── Abilities ────────────────────────────────────────── */}
+          {/* Abilities */}
           {tab === "abilities" && (
             <div className="gl-split">
               <div className="gl-list">
@@ -624,6 +666,8 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                 )}
               </div>
             </div>
+          )}
+          </>
           )}
         </div>
       </section>
