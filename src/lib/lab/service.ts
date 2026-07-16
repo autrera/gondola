@@ -14,6 +14,7 @@ import {
   rollbackChampion,
   saveProposal,
   saveTrace,
+  undoRollbackChampion,
 } from "./store";
 import {
   CASE_REGISTRY,
@@ -247,6 +248,23 @@ export async function rollback(approvedBy: string): Promise<ConfigVersion | unde
     const proposals = await listProposals();
     const promoted = proposals.find((proposal) => proposal.status === "promoted" && proposal.challengerVersionId === previousChampionId);
     if (promoted) await saveProposal({ ...promoted, status: "rolled_back" });
+  }
+  return restored;
+}
+
+/**
+ * Undo the most recent rollback: restore the champion the rollback demoted and
+ * return its proposal to "promoted". No-op (returns undefined) when there is
+ * nothing to undo or the champion moved since the rollback.
+ */
+export async function undoRollback(approvedBy: string): Promise<ConfigVersion | undefined> {
+  const before = await getConfigState();
+  const lastRollback = [...before.history].reverse().find((record) => record.action === "rollback");
+  const restored = await undoRollbackChampion(approvedBy.trim() || "user");
+  if (restored && lastRollback) {
+    const proposals = await listProposals();
+    const demoted = proposals.find((proposal) => proposal.status === "rolled_back" && proposal.challengerVersionId === restored.versionId);
+    if (demoted) await saveProposal({ ...demoted, status: "promoted" });
   }
   return restored;
 }

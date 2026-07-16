@@ -9,6 +9,7 @@ import {
   rejectProposal,
   rollback,
   seedDemo,
+  undoRollback,
 } from "@/lib/lab/service";
 
 export const runtime = "nodejs";
@@ -62,6 +63,10 @@ export async function POST(request: Request) {
     }
     if (action === "rollback") {
       const version = await rollback(String(body.approvedBy ?? "user"));
+      return Response.json({ champion: version ?? null });
+    }
+    if (action === "undo_rollback") {
+      const version = await undoRollback(String(body.approvedBy ?? "user"));
       return Response.json({ champion: version ?? null });
     }
     return Response.json({ error: "Unknown Gondola Lab action" }, { status: 400 });

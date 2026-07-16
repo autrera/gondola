@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CloseIcon } from "./Icons";
+import { CloseIcon, TrashIcon } from "./Icons";
 import type {
   ConfigFieldDiff,
   ConfigVersion,
@@ -71,6 +71,12 @@ const CSS = `
 .gl-prop:hover { border-color: var(--line-bright); }
 .gl-prop.is-active { border-color: rgba(184,207,232,.42); background: rgba(184,207,232,.06); }
 .gl-prop small { display: block; color: var(--faint); font-size: 10.5px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gl-prop-row { display: flex; align-items: center; gap: 8px; }
+.gl-prop-select { all: unset; flex: 1; min-width: 0; cursor: pointer; }
+.gl-prop-delete { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; color: var(--faint); background: transparent; cursor: pointer; opacity: .45; transition: color .14s, background .14s, opacity .14s; }
+.gl-prop:hover .gl-prop-delete { opacity: .7; }
+.gl-prop-delete:hover:not(:disabled) { color: var(--coral); background: rgba(255,142,122,.12); opacity: 1; }
+.gl-prop-delete:disabled { opacity: .2; cursor: default; }
 .gl-status { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .gl-status.ready_for_review, .gl-status.promoted { color: #8bbf9d; background: rgba(139,191,157,.12); }
 .gl-status.failed, .gl-status.rejected, .gl-status.rolled_back { color: var(--coral); background: rgba(255,142,122,.12); }
@@ -221,6 +227,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
           <button className="gl-btn" disabled={Boolean(busy)} onClick={() => void act("seed_demo")}>Seed demo run</button>
           <button className="gl-btn primary" disabled={Boolean(busy)} onClick={() => void act("generate_proposal")}>Generate proposal</button>
           <button className="gl-btn" disabled={Boolean(busy) || !snapshot?.history.some((record) => record.action === "promote")} onClick={() => void act("rollback", { approvedBy: approver || "user" })}>Rollback champion</button>
+          <button className="gl-btn" disabled={Boolean(busy) || !snapshot || snapshot.history[snapshot.history.length - 1]?.action !== "rollback"} onClick={() => void act("undo_rollback", { approvedBy: approver || "user" })}>Undo rollback</button>
           <span className="gl-champ">
             Champion <b>{champion ? champion.versionId.slice(0, 8) : "none"}</b>
             {policy ? ` · ${policy.conceptCount} concept(s), critic ${policy.useSeparateCritic ? "on" : "off"}, gate ${policy.requireAnalyzeBeforeAnimate ? "on" : "off"}` : ""}
@@ -235,19 +242,19 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             <h3>Proposals</h3>
             {snapshot?.proposals.length
               ? snapshot.proposals.map((item) => (
-                <div key={item.proposalId} className={`gl-prop${selected === item.proposalId ? " is-active" : ""}`}>
-                  <button type="button" onClick={() => setSelected(item.proposalId)} style={{ all: "unset", display: "block", width: "100%", cursor: "pointer" }}>
+                <div key={item.proposalId} className={`gl-prop gl-prop-row${selected === item.proposalId ? " is-active" : ""}`}>
+                  <button type="button" className="gl-prop-select" onClick={() => setSelected(item.proposalId)}>
                     <span className={`gl-status ${item.status}`}>{item.status.replace(/_/g, " ")}</span>
                     <small>{item.observedProblem}</small>
                   </button>
-                  <div className="gl-mini">
-                    <button className="gl-btn danger" disabled={Boolean(busy)} onClick={() => {
-                      const id = item.proposalId;
-                      void act("delete_proposal", { proposalId: id }).then(() => {
-                        if (selected === id) { setSelected(""); setDetail(null); }
-                      });
-                    }}>Delete</button>
-                  </div>
+                  <button type="button" className="gl-prop-delete" title="Delete proposal" aria-label="Delete proposal" disabled={Boolean(busy)} onClick={() => {
+                    const id = item.proposalId;
+                    void act("delete_proposal", { proposalId: id }).then(() => {
+                      if (selected === id) { setSelected(""); setDetail(null); }
+                    });
+                  }}>
+                    <TrashIcon size={14} />
+                  </button>
                 </div>
               ))
               : <p className="muted" style={{ margin: "6px" }}>No proposals yet. Seed a run, then generate one.</p>}
@@ -268,12 +275,14 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             <h3>Approved abilities</h3>
             {abilities.filter((ability) => ability.status === "approved").length
               ? abilities.filter((ability) => ability.status === "approved").map((ability) => (
-                <div key={ability.id} className="gl-prop" style={{ cursor: "default" }}>
-                  <small style={{ marginTop: 0, color: "var(--ink)" }}>{ability.name}</small>
-                  <small>{ability.description}</small>
-                  <div className="gl-mini">
-                    <button className="gl-btn danger" disabled={Boolean(busy)} onClick={() => void actAbility("delete_ability", ability.id)}>Remove</button>
+                <div key={ability.id} className="gl-prop gl-prop-row" style={{ cursor: "default" }}>
+                  <div className="gl-prop-select" style={{ cursor: "default" }}>
+                    <small style={{ marginTop: 0, color: "var(--ink)" }}>{ability.name}</small>
+                    <small>{ability.description}</small>
                   </div>
+                  <button type="button" className="gl-prop-delete" title="Remove ability" aria-label="Remove ability" disabled={Boolean(busy)} onClick={() => void actAbility("delete_ability", ability.id)}>
+                    <TrashIcon size={14} />
+                  </button>
                 </div>
               ))
               : <p className="muted" style={{ margin: "6px" }}>No approved abilities yet.</p>}

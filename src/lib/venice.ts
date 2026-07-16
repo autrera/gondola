@@ -1014,8 +1014,11 @@ export async function quoteAndQueueVideo(
       quote = await veniceJson<{ quote: number }>("/video/quote", {
         model: candidate,
         duration,
-        aspect_ratio: "16:9",
         resolution,
+        // Seedance image/reference variants derive the aspect ratio from the
+        // source image and return a 400 if aspect_ratio is sent; only text-to-
+        // video (no source image) accepts it.
+        ...(mode === "text" ? { aspect_ratio: "16:9" } : {}),
       }, signal);
       model = candidate;
       break;
@@ -1046,8 +1049,8 @@ export async function quoteAndQueueVideo(
     {
       model,
       duration,
-      aspect_ratio: "16:9",
       resolution,
+      ...(mode === "text" ? { aspect_ratio: "16:9" } : {}),
       prompt: withAudio
         ? `${prompt}\n\nAudio direction: ${options.soundtrack === "music" ? options.audioDirection?.trim() || "cinematic instrumental music matching the scene" : "natural synchronized environmental sound, with no added score"}.`
         : prompt,
