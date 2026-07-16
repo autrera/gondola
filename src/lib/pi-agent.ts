@@ -52,6 +52,7 @@ import { loadTranscript, saveTranscript } from "./transcript";
 import { enqueueRun } from "./run-queue";
 import { MAX_SUBAGENT_DEPTH, runSubAgent } from "./subagent";
 import { recordExperience } from "./skill-distiller";
+import { recordLiveTrace } from "./lab/ingest";
 import { createUserAgentMessage, retainUnansweredUserMessage } from "./agent-context";
 
 type Emit = (event: Record<string, unknown>) => void;
@@ -77,6 +78,8 @@ interface RuntimeContext {
   subAgentDepth: number;
   /** Which memory this turn reads and writes: personal, or an agent's private store. */
   memoryScope: MemoryScope;
+  /** Per-turn collector for the Lab trace bridge: tool outcomes + start time. */
+  turnTrace?: { startedAt: number; toolCalls: { tool: string; ok: boolean; error?: string }[] };
 }
 
 /**
@@ -990,9 +993,16 @@ function createSession(input: {
     } else if (event.type === "tool_execution_update") {
       runtime.emit({ type: "tool_update", name: event.toolName, partial: event.partialResult });
     } else if (event.type === "tool_execution_end") {
-      if (event.toolName === "search_web" && !needsLiveWebResearch(runtime.currentMessage ?? "")) return;
       const result = event.result as { content?: Array<{ type?: string; text?: string }>; details?: unknown } | undefined;
       const resultText = result?.content?.map((part) => part.type === "text" ? part.text ?? "" : "").join("\n").trim();
+      // Record every tool outcome for the Lab trace bridge, including ones the UI
+      // suppresses below, so the outer loop sees the real execution history.
+      runtime.turnTrace?.toolCalls.push({
+        tool: event.toolName,
+        ok: !event.isError,
+        ...(event.isError ? { error: (resultText || "tool error").slice(0, 240) } : {}),
+      });
+      if (event.toolName === "search_web" && !needsLiveWebResearch(runtime.currentMessage ?? "")) return;
       runtime.emit({
         type: "tool_end",
         name: event.toolName,
@@ -1084,6 +1094,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
   session.runtime.emit = input.emit;
   session.runtime.currentMessage = input.message;
   session.runtime.webSearchCompleted = false;
+  session.runtime.turnTrace = { startedAt: Date.now(), toolCalls: [] };
   session.agent.state.systemPrompt = buildSystemPrompt(
     resources.agent,
     resources.skills,
@@ -1238,6 +1249,22 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
               ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.name] : []))
               : []);
           void recordExperience({ agentId: resources.agent.id, conversationId: input.sessionId, message: input.message, tools: turnTools }).catch(() => undefined);
+          // Bridge this completed turn into the Lab as an immutable draft trace.
+          // Observation only: the Lab reads these to propose improvements, but the
+          // acting runtime never grades or promotes itself from here.
+          const modelCosts = addedMessages.flatMap((message) =>
+            message.role === "assistant" && message.stopReason !== "error"
+              ? [{ model: message.model ?? model, costUsd: message.usage?.cost?.total ?? 0 }]
+              : []);
+          void recordLiveTrace({
+            goal: input.message,
+            modelsSelected: [model],
+            modelCosts,
+            toolCalls: session.runtime.turnTrace?.toolCalls ?? [],
+            latencyMs: Date.now() - (session.runtime.turnTrace?.startedAt ?? Date.now()),
+            completed: true,
+            finalOutput: assistantText ?? "",
+          }).catch(() => undefined);
         }
         return;
       }
@@ -1273,6 +1300,17 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       unansweredUserMessage,
     );
     await saveTranscript(input.sessionId, session.agent.state.messages).catch(() => undefined);
+    // Record the failed turn too: repeated failures are exactly what the Lab's
+    // outer loop needs to see to propose a fix.
+    void recordLiveTrace({
+      goal: input.message,
+      modelsSelected: candidates,
+      modelCosts: [],
+      toolCalls: session.runtime.turnTrace?.toolCalls ?? [],
+      latencyMs: Date.now() - (session.runtime.turnTrace?.startedAt ?? Date.now()),
+      completed: false,
+      finalOutput: lastError,
+    }).catch(() => undefined);
   }
   throw new Error(`Venice is temporarily unavailable after trying compatible fallbacks. ${lastError}`);
 }
