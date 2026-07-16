@@ -157,6 +157,7 @@ export interface RuntimeEnvironment {
 export interface RuntimeApprovals {
   pending: { id: string; tool: string; summary: string; createdAt: string }[];
   sessionGrants: { tool: string; grantedAt: string }[];
+  guardedTools: { tool: string; risk: string }[];
 }
 
 export interface RuntimeArchitecture {

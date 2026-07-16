@@ -19,7 +19,7 @@ import { getChampionConfig } from "./lab/apply";
 import { autopilotEnabled, getLabSnapshot } from "./lab/service";
 import { policyDirectives } from "./lab/policy";
 import { getMemorySnapshot } from "./memory";
-import { listApprovals, listGrants } from "./approval-store";
+import { guardedToolList, listApprovals, listGrants } from "./approval-store";
 import { gondolaConstitution } from "./constitution";
 import { loadModelRegistry } from "./model-registry";
 import type {
@@ -276,6 +276,7 @@ export async function buildRuntimeSnapshot(input: RuntimeSnapshotInput): Promise
     approvals: {
       pending: approvalsPending.map((record) => ({ id: record.id, tool: record.tool, summary: record.summary, createdAt: record.createdAt })),
       sessionGrants: grants.map((grant) => ({ tool: grant.tool, grantedAt: grant.grantedAt })),
+      guardedTools: guardedToolList(),
     },
     architecture: (() => {
       const constitution = gondolaConstitution();
