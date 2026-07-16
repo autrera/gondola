@@ -72,6 +72,7 @@ import {
   type StepStatus,
 } from "./execution-state";
 import { markFailureRecovered, recordFailure } from "./failure-journal";
+import { isToolAutoApproved, recordApprovalDecision, recordApprovalRequest } from "./approval-store";
 import { createVeniceStreamFn, makeModel } from "./venice-model";
 import { veniceApiCall, veniceReference, VENICE_API_OVERVIEW, type VeniceApiInput } from "./venice-control";
 import { compactMessages } from "./compaction";
@@ -224,6 +225,22 @@ async function recordMediaTaskFromDetails(
   } catch {
     return undefined;
   }
+}
+
+// Gate a destructive tool call: proceed on explicit confirmation or an owner
+// session grant, otherwise record a pending approval. Every outcome is
+// journalled so the human-in-the-loop boundary is auditable via the runtime.
+async function gateApproval(runtime: RuntimeContext, tool: string, summary: string, confirmed: boolean | undefined): Promise<boolean> {
+  if (confirmed === true) {
+    void recordApprovalDecision({ conversationId: runtime.sessionId, tool, summary, status: "approved" }).catch(() => undefined);
+    return true;
+  }
+  if (await isToolAutoApproved(runtime.sessionId, tool).catch(() => false)) {
+    void recordApprovalDecision({ conversationId: runtime.sessionId, tool, summary, status: "approved", decidedBy: "session-grant" }).catch(() => undefined);
+    return true;
+  }
+  void recordApprovalRequest({ conversationId: runtime.sessionId, tool, summary }).catch(() => undefined);
+  return false;
 }
 
 const SYSTEM_PROMPT = `You are an expressive AI companion in a polished voice and vision interface.
@@ -1036,7 +1053,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       if (runtime.subAgentDepth > 0 && input.overwrite) {
         return { content: [{ type: "text", text: "As a worker sub-agent I can create new files and edit existing ones, but I can't overwrite a whole file. Use edit_file for changes, or leave the overwrite to the primary assistant." }], details: { kind: "fs_write", ok: false, blocked: "subagent_overwrite", path: input.path } };
       }
-      if (input.overwrite && input.confirmed !== true) {
+      if (input.overwrite && !(await gateApproval(runtime, "write_file", `overwrite ${input.path}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Overwriting ${input.path} will replace its contents (a backup is kept). Confirm and I'll proceed.` }], details: { kind: "fs_write", ok: false, needsConfirmation: true, path: input.path } };
       }
       try {
@@ -1089,7 +1106,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       if (runtime.subAgentDepth > 0 && input.overwrite) {
         return { content: [{ type: "text", text: "As a worker sub-agent I can't overwrite an existing destination. Leave that to the primary assistant." }], details: { kind: "fs_move", ok: false, blocked: "subagent_overwrite" } };
       }
-      if (input.overwrite && input.confirmed !== true) {
+      if (input.overwrite && !(await gateApproval(runtime, "move_path", `move onto ${input.to}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Moving onto ${input.to} will replace it (the old one goes to the trash). Confirm and I'll proceed.` }], details: { kind: "fs_move", ok: false, needsConfirmation: true } };
       }
       try {
@@ -1114,7 +1131,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
     async execute(_toolCallId, params) {
       if (!runtime.settings.fileAccess) return fsDisabled("fs_delete");
       const input = params as { path: string; confirmed?: boolean };
-      if (input.confirmed !== true) {
+      if (!(await gateApproval(runtime, "delete_path", `delete ${input.path}`, input.confirmed))) {
         return { content: [{ type: "text", text: `Deleting ${input.path} will move it to the recoverable trash. Confirm and I'll proceed.` }], details: { kind: "fs_delete", ok: false, needsConfirmation: true, path: input.path } };
       }
       try {
@@ -1141,7 +1158,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         return { content: [{ type: "text", text: "Running terminal commands is turned off in settings, so I can't do that right now." }], details: { kind: "fs_command", enabled: false } };
       }
       const input = params as { command: string; cwd?: string; confirmed?: boolean };
-      if (input.confirmed !== true) {
+      if (!(await gateApproval(runtime, "run_command", `run: ${input.command}`, input.confirmed))) {
         return { content: [{ type: "text", text: `About to run: ${input.command}${input.cwd ? ` (in ${input.cwd})` : ""}. Confirm and I'll run it.` }], details: { kind: "fs_command", ok: false, needsConfirmation: true, command: input.command } };
       }
       try {

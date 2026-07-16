@@ -100,6 +100,7 @@ function sampleSnapshot(overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapsh
       recentProposals: [{ id: "p-1", status: "rejected", summary: "image-to-video failed" }],
       activePolicies: ["Analyze media before animating."],
     },
+    approvals: { pending: [], sessionGrants: [] },
     environment: {
       workspacePath: "/tmp/ws",
       os: "Darwin 25.5.0",
