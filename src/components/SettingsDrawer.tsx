@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentSettings, CatalogModel } from "@/lib/app-types";
 import { CameraIcon, CloseIcon, PlugIcon, SparkleIcon, VolumeIcon } from "./Icons";
+import { ProvidersPanel } from "./ProvidersPanel";
 
 const VOICE_PROFILES = [
   { id: "natural-male", label: "Natural male", detail: "Warm and grounded", model: "tts-xai-v1", voice: "rex" },
@@ -15,7 +16,7 @@ const CATEGORIES: { id: SettingsCategory; label: string; hint: string }[] = [
   { id: "voice", label: "Voice", hint: "Sound and delivery" },
   { id: "behavior", label: "Camera and behavior", hint: "Awareness and web" },
   { id: "models", label: "Models", hint: "Venice routing" },
-  { id: "connection", label: "Connection", hint: "Privacy and status" },
+  { id: "connection", label: "Providers", hint: "Capabilities and status" },
 ];
 
 interface SettingsDrawerProps {
@@ -275,21 +276,7 @@ export function SettingsDrawer({
               </section>
             )}
 
-            {category === "connection" && (
-              <section className="settings-group">
-                <div className="settings-group-heading">
-                  <h3>Connection and privacy</h3>
-                  <p>Everything runs locally against your own Venice key.</p>
-                </div>
-                <div className="privacy-note">
-                  <span className={`privacy-status ${connected ? "connected" : ""}`} />
-                  <div>
-                    <strong>{connected ? "Connected privately" : "Checking Venice"}</strong>
-                    <p>Your key stays on this Mac. Short camera clips are sent only while camera awareness is active.</p>
-                  </div>
-                </div>
-              </section>
-            )}
+            {category === "connection" && <ProvidersPanel />}
           </div>
         </div>
       </section>

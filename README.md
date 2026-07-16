@@ -29,6 +29,8 @@ cp .env.example .env.local   # then add your VENICE_API_KEY
 
 ## Usage
 
+On first run, Gondola shows a guided setup that verifies your Venice key and turns on capabilities. Developers can skip it by adding a key to `.env.local` as above.
+
 Terminal harness, operating on the current working directory:
 
 ```bash

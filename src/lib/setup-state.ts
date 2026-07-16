@@ -1,0 +1,238 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import {
+  getCredentialStatus,
+  gondolaHomeDir,
+  maskSuffix,
+  resolveCredential,
+  writeStoredCredential,
+  type CredentialStatus,
+} from "./credential-store";
+import {
+  DEFAULT_PROVIDER_ID,
+  deriveCapabilityRoutes,
+  detectAvailableCapabilities,
+  requireProvider,
+} from "./providers/registry";
+import type { Capability, CapabilityRoute, ProviderModel } from "./providers/types";
+
+// SERVER-ONLY. The single first-run authority shared by the web app and the CLI.
+// A setup is "ready" ONLY after a live catalog request succeeds, a minimal real
+// chat completion succeeds, a default conversation model is chosen, and
+// capability defaults are derived. The presence of a key string is never enough.
+
+export type SetupState =
+  | "not_configured"
+  | "credential_detected"
+  | "verifying"
+  | "invalid_credential"
+  | "inference_failed"
+  | "ready"
+  | "repair_required";
+
+interface SetupRecord {
+  version: 1;
+  providerId: string;
+  verifiedAt: string;
+  verifiedSuffix: string;
+  defaultChatModel: string;
+  capabilities: Record<Capability, boolean>;
+  routes: Partial<Record<Capability, CapabilityRoute>>;
+}
+
+export interface SetupStatus {
+  state: SetupState;
+  providerId: string;
+  provider: { id: string; name: string; keyManagementUrl: string };
+  credential: CredentialStatus;
+  verifiedAt?: string;
+  defaultChatModel?: string;
+  capabilities?: Record<Capability, boolean>;
+  routes?: Partial<Record<Capability, CapabilityRoute>>;
+  /** Sanitized, user-facing guidance. Never contains a credential. */
+  message?: string;
+  reason?: string;
+  latencyMs?: number;
+}
+
+function setupPath(): string {
+  return path.join(gondolaHomeDir(), "setup.json");
+}
+
+function readSetupRecord(): SetupRecord | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(setupPath(), "utf8")) as Partial<SetupRecord>;
+    if (!parsed || typeof parsed.verifiedAt !== "string" || typeof parsed.verifiedSuffix !== "string") {
+      return undefined;
+    }
+    return parsed as SetupRecord;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSetupRecord(record: SetupRecord): void {
+  mkdirSync(gondolaHomeDir(), { recursive: true, mode: 0o700 });
+  writeFileSync(setupPath(), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+}
+
+export function clearSetupRecord(): void {
+  try {
+    rmSync(setupPath());
+  } catch {
+    // Nothing persisted yet.
+  }
+}
+
+function providerInfo(providerId: string) {
+  const provider = requireProvider(providerId);
+  return { id: provider.id, name: provider.name, keyManagementUrl: provider.keyManagementUrl };
+}
+
+/**
+ * Steady-state setup status derived from the persisted verification + the
+ * currently resolved credential. Does not perform network calls.
+ */
+export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupStatus {
+  const credential = getCredentialStatus(providerId);
+  const provider = providerInfo(providerId);
+  const base: SetupStatus = { state: "not_configured", providerId, provider, credential };
+
+  const resolved = resolveCredential(providerId);
+  if (!resolved) return base;
+
+  const record = readSetupRecord();
+  if (!record || record.providerId !== providerId) {
+    return { ...base, state: "credential_detected" };
+  }
+  if (record.verifiedSuffix !== maskSuffix(resolved.apiKey)) {
+    // The verified credential is no longer the active one.
+    return {
+      ...base,
+      state: "repair_required",
+      message: "The active credential changed since it was last verified. Re-verify to continue.",
+    };
+  }
+  return {
+    ...base,
+    state: "ready",
+    verifiedAt: record.verifiedAt,
+    defaultChatModel: record.defaultChatModel,
+    capabilities: record.capabilities,
+    routes: record.routes,
+  };
+}
+
+export function isSetupReady(providerId: string = DEFAULT_PROVIDER_ID): boolean {
+  return getSetupStatus(providerId).state === "ready";
+}
+
+export interface VerifyOptions {
+  providerId?: string;
+  /** A candidate key to verify and (on full success) persist. */
+  apiKey?: string;
+  /** When persisting a candidate key, make it override an env credential. */
+  override?: boolean;
+  signal?: AbortSignal;
+}
+
+/**
+ * Verify a credential end-to-end and, on full success, persist the verification
+ * (and the candidate key when one was supplied). This is the ONLY path that can
+ * move setup to "ready". Nothing is persisted unless every check passes.
+ */
+export async function verifySetup(options: VerifyOptions = {}): Promise<SetupStatus> {
+  const providerId = options.providerId ?? DEFAULT_PROVIDER_ID;
+  const provider = requireProvider(providerId);
+  const info = providerInfo(providerId);
+
+  const candidateKey = options.apiKey?.trim();
+  const resolved = candidateKey
+    ? { providerId, apiKey: candidateKey, source: "file" as const }
+    : resolveCredential(providerId);
+
+  if (!resolved) {
+    return {
+      state: "not_configured",
+      providerId,
+      provider: info,
+      credential: getCredentialStatus(providerId),
+      message: "No credential is configured yet.",
+    };
+  }
+
+  // 1. Live catalog must accept the credential.
+  let models: ProviderModel[];
+  try {
+    models = await provider.listModels(resolved, options.signal);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    const status = (error as { status?: number }).status;
+    const reason = status === 402 ? "no_credits" : "invalid_credential";
+    return {
+      state: "invalid_credential",
+      providerId,
+      provider: info,
+      credential: getCredentialStatus(providerId),
+      reason,
+      message: status === 402
+        ? "This Venice key has no available credits. Add credits, then verify again."
+        : "Venice rejected this key. Check that you copied the full inference key.",
+    };
+  }
+
+  // 2. A valid default conversation model must exist.
+  const defaultChatModel = provider.selectDefaultChatModel(models);
+  if (!defaultChatModel) {
+    return {
+      state: "inference_failed",
+      providerId,
+      provider: info,
+      credential: getCredentialStatus(providerId),
+      reason: "no_chat_model",
+      message: "No conversation model is available on this account.",
+    };
+  }
+
+  // 3. A minimal real completion must succeed.
+  const probe = await provider.runInferenceProbe(resolved, defaultChatModel, options.signal);
+  if (!probe.ok) {
+    return {
+      state: "inference_failed",
+      providerId,
+      provider: info,
+      credential: getCredentialStatus(providerId),
+      reason: probe.reason,
+      message: probe.message ?? "A test message to Venice did not succeed.",
+    };
+  }
+
+  // 4. Derive capability defaults from the live catalog. Only now persist.
+  const capabilities = detectAvailableCapabilities(models);
+  const routes = deriveCapabilityRoutes(models, providerId);
+
+  if (candidateKey) {
+    writeStoredCredential(providerId, candidateKey, { override: options.override });
+  }
+  writeSetupRecord({
+    version: 1,
+    providerId,
+    verifiedAt: new Date().toISOString(),
+    verifiedSuffix: maskSuffix(resolved.apiKey),
+    defaultChatModel,
+    capabilities,
+    routes,
+  });
+
+  return {
+    state: "ready",
+    providerId,
+    provider: info,
+    credential: getCredentialStatus(providerId),
+    verifiedAt: new Date().toISOString(),
+    defaultChatModel,
+    capabilities,
+    routes,
+    latencyMs: probe.latencyMs,
+  };
+}

@@ -31,6 +31,7 @@ import { ModelPicker } from "@/components/ModelPicker";
 import { SettingsDrawer } from "@/components/SettingsDrawer";
 import { WorkspaceDrawer, type WorkspaceTab } from "@/components/WorkspaceDrawer";
 import { ConversationSearch } from "@/components/ConversationSearch";
+import { Onboarding, type SetupStatusView } from "@/components/Onboarding";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_PRESENCE,
@@ -48,6 +49,7 @@ import {
   type WorkspaceSnapshot,
 } from "@/lib/app-types";
 import { needsLiveWebResearch } from "@/lib/conversation";
+import { FEATURES } from "@/lib/features";
 import { supportedReasoningEfforts } from "@/lib/model-capabilities";
 import { removeEmDashes } from "@/lib/text-style";
 import { takeEarlySpeechSegment } from "@/lib/voice-latency";
@@ -251,10 +253,11 @@ function isInternalMediaConfirmation(text: string): boolean {
     && /Set confirmed=true\.?$/i.test(value);
 }
 
-const quickPrompts = [
-  { icon: "◌", label: "Say hello", prompt: "Introduce yourself naturally and tell me what you can help with." },
-  { icon: "⌁", label: "Look at me", prompt: "Look at me. What visible expression or gesture am I making?" },
-  { icon: "✦", label: "Create an alien", prompt: "Generate a cinematic portrait of a friendly bioluminescent alien." },
+const homeSuggestions = [
+  { Icon: SparkleIcon, label: "Introduce yourself", prompt: "Introduce yourself naturally and tell me what you can help with." },
+  { Icon: CameraIcon, label: "Look at me", prompt: "Look at me. What visible expression or gesture am I making right now?" },
+  { Icon: ImageIcon, label: "Create an image", prompt: "Generate a cinematic portrait of a friendly bioluminescent alien." },
+  { Icon: FileTextIcon, label: "Plan my day", prompt: "Help me plan my day. Ask me what matters most, then draft a simple plan." },
 ];
 
 function createId(prefix: string): string {
@@ -642,7 +645,7 @@ function SubAgentCard({ run }: { run: SubAgentRun }) {
   );
 }
 
-export default function Home() {
+function Workspace() {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [action, setAction] = useState<AvatarAction>("neutral");
@@ -678,7 +681,7 @@ export default function Home() {
   const attachmentDragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("agents");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>(FEATURES.agentsTab ? "agents" : "chats");
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState<WorkspaceSnapshot>();
   const [activeAgentId, setActiveAgentId] = useState("");
   const [voiceModeOpen, setVoiceModeOpen] = useState(false);
@@ -774,6 +777,10 @@ export default function Home() {
     ?? workspaceSnapshot?.agents[0], [activeAgentId, workspaceSnapshot?.agents]);
   const agentName = activeAgent?.name ?? "Entity";
   const agentInitial = agentName.charAt(0).toUpperCase();
+  // Fresh conversation (only the derived welcome message, no user turns yet):
+  // show the centered home hero instead of a running transcript.
+  const isHome = messages.length === 1 && (messages[0]?.id?.startsWith("welcome-") ?? false) && !cameraPrompt;
+  const homeTitle = agentName && agentName !== "Entity" ? `What should we explore, ${agentName}?` : "What should we explore?";
   const motionVisionModel = useMemo(() => {
     const supportsVideo = (model: CatalogModel) => model.capabilities?.supportsVideoInput === true || model.capabilities?.supportsVideo === true;
     const selected = models.find((model) => model.id === settings.visionModel);
@@ -990,6 +997,20 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem("nova-settings", JSON.stringify(settings));
   }, [settings]);
+
+  // After onboarding, pre-fill the composer with the suggested first message so
+  // the user can meet Gondola with a single send.
+  useEffect(() => {
+    try {
+      const intro = localStorage.getItem("nova-onboarding-intro");
+      if (intro) {
+        setInput(intro);
+        localStorage.removeItem("nova-onboarding-intro");
+      }
+    } catch {
+      // localStorage may be unavailable; not critical.
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -3270,6 +3291,7 @@ export default function Home() {
               onActiveChange={setChatSearchActive}
             />
           </div>
+          {FEATURES.agentsTab && (
           <div className="sidebar-section">
             <div className="sidebar-section-head">
               <span className="sidebar-section-label">Agents</span>
@@ -3291,6 +3313,7 @@ export default function Home() {
                 : <p className="sidebar-empty">Loading agents…</p>}
             </div>
           </div>
+          )}
 
           <div className="sidebar-section">
             <span className="sidebar-section-label">Chats</span>
@@ -3397,8 +3420,22 @@ export default function Home() {
             </div>
           </header>
 
-          <div className="transcript" aria-live="polite" ref={transcriptRef}>
-            {messages.filter((message) => !isInternalMediaConfirmation(message.text)).map((message) => (
+          <div className={`transcript${isHome ? " is-home" : ""}`} aria-live="polite" ref={transcriptRef}>
+            {isHome && (
+              <div className="chat-home">
+                <span className="chat-home-mark" aria-hidden="true"><i /><i /><i /></span>
+                <h1 className="chat-home-title">{homeTitle}</h1>
+                <div className="chat-home-grid">
+                  {homeSuggestions.map(({ Icon, label, prompt }) => (
+                    <button key={label} type="button" className="chat-home-card" onClick={() => void sendMessage(prompt)}>
+                      <span className="chat-home-card-icon"><Icon size={16} /></span>
+                      <span className="chat-home-card-label">{label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!isHome && messages.filter((message) => !isInternalMediaConfirmation(message.text)).map((message) => (
               <article key={message.id} className={`message message-${message.role}${message.queued ? " message-queued" : ""}`}>
                 <div className="message-meta">
                   <span className="message-avatar">{message.role === "assistant" ? agentInitial : "YOU"}</span>
@@ -3573,16 +3610,6 @@ export default function Home() {
             )}
             <div ref={transcriptEndRef} />
           </div>
-
-          {messages.length <= 1 && !cameraPrompt && (
-            <div className="quick-prompts">
-              {quickPrompts.map((item) => (
-                <button key={item.label} onClick={() => void sendMessage(item.prompt)}>
-                  <span>{item.icon}</span><strong>{item.label}</strong>
-                </button>
-              ))}
-            </div>
-          )}
 
           {cameraPrompt && (
             <div className="camera-permission" role="dialog" aria-label="Camera permission request">
@@ -3855,4 +3882,42 @@ declare global {
   interface Window {
     webkitAudioContext?: typeof AudioContext;
   }
+}
+
+// First-run gate. The workspace (and its heavy camera/audio/session hooks) only
+// mounts once setup is verified "ready"; otherwise the onboarding wizard runs.
+function OnboardingGate() {
+  const [status, setStatus] = useState<SetupStatusView | undefined>(undefined);
+  const [checked, setChecked] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/setup/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((body: SetupStatusView) => {
+        if (cancelled) return;
+        setStatus(body);
+        setReady(body.state === "ready");
+      })
+      .catch(() => { if (!cancelled) setStatus(undefined); })
+      .finally(() => { if (!cancelled) setChecked(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!checked) {
+    return (
+      <div className="onb-splash" aria-busy="true">
+        <span className="onb-splash-mark">Gondola</span>
+      </div>
+    );
+  }
+  if (!ready) {
+    return <Onboarding initialStatus={status} onReady={() => setReady(true)} />;
+  }
+  return <Workspace />;
+}
+
+export default function Home() {
+  return <OnboardingGate />;
 }
