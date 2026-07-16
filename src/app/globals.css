@@ -7960,36 +7960,26 @@ input:focus-visible {
   .app-shell.sidebar-collapsed .conversation-header { padding-left: 52px !important; }
 }
 
-/* ── Clear chat attribution ───────────────────────────────────────────────
-   On this near-black theme the earlier distinction was nearly invisible. Make it
-   obvious: your messages sit in a right-aligned, clearly-lighter bubble under a
-   "YOU" label; Gondola's are left-aligned full-width text under its name. */
+/* ── Message attribution by bubble (no text labels) ────────────────────────
+   No "You"/name labels: the distinction is purely the bubble. Your messages are
+   a right-aligned, clearly-lighter bubble; Gondola's are left-aligned full-width
+   plain text. Keep the sender label hidden (screen-reader only). */
 .message-meta {
-  position: static;
-  width: auto;
-  height: auto;
-  overflow: visible;
-  clip: auto;
-  clip-path: none;
-  display: flex;
-  align-items: center;
-  margin-bottom: 6px;
-  color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-.message-meta .message-avatar { display: none; }
-.message-user .message-meta { justify-content: flex-end; }
-.message-user .message-meta { color: #9db8dc; }
 .message-user > .message-content {
   width: fit-content;
   max-width: min(82%, 600px);
   padding: 11px 15px;
-  border: 1px solid rgba(150, 185, 235, .32);
+  border: 1px solid rgba(160, 190, 235, .30);
   border-radius: 16px 16px 6px 16px;
-  background: #1a2230;
+  background: #1f2836;
   color: #eef3fa;
 }
 .message-assistant > .message-content {
