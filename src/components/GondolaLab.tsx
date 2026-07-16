@@ -44,6 +44,8 @@ interface GondolaLabProps {
   open: boolean;
   onClose: () => void;
   agentId?: string;
+  /** The agent's chosen name (falls back to a neutral label if unset). */
+  entityName?: string;
 }
 
 type Tab = "overview" | "experiments" | "runs" | "setup" | "abilities";
@@ -239,7 +241,7 @@ class LabErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
-export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaLabProps) {
+export function GondolaLab({ open, onClose, agentId = "nova-default", entityName = "the agent" }: GondolaLabProps) {
   const [snapshot, setSnapshot] = useState<LabSnapshot | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [selected, setSelected] = useState<string>("");
@@ -334,9 +336,9 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
       setTab("experiments");
       setSelected(payload.proposal.proposalId);
     } else {
-      setNotice("Nothing new to test right now. Every pattern the Lab has seen is already being tested or does not have enough evidence yet. Let Entity run more tasks and check back.");
+      setNotice(`Nothing new to test right now. Every pattern the Lab has seen is already being tested or does not have enough evidence yet. Let ${entityName} run more tasks and check back.`);
     }
-  }, [act]);
+  }, [act, entityName]);
 
   useEffect(() => {
     if (!open) return;
@@ -398,8 +400,8 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
         <header className="gl-head">
           <div className="gl-titles">
             <span className="gl-kicker">Gondola Lab</span>
-            <h2>Research on Entity</h2>
-            <p>A research lab with one subject: Entity. It finds what recurs, tests improvements against the current setup, and adopts only what proves out, with your approval.</p>
+            <h2>Research on {entityName}</h2>
+            <p>A research lab with one subject: {entityName}. It finds what recurs, tests improvements against the current setup, and adopts only what proves out, with your approval.</p>
           </div>
           <button className="gl-close" onClick={onClose} aria-label="Close Gondola Lab"><CloseIcon size={16} /></button>
         </header>
@@ -431,8 +433,8 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             nothingYet ? (
               <div className="gl-empty">
                 <div className="gl-empty-inner">
-                  <p>The Lab has not watched Entity work yet, so there is nothing to study.</p>
-                  <p className="muted">Let Entity run some tasks, or load a few sample runs to explore how the Lab works.</p>
+                  <p>The Lab has not watched {entityName} work yet, so there is nothing to study.</p>
+                  <p className="muted">Let {entityName} run some tasks, or load a few sample runs to explore how the Lab works.</p>
                   <button className="gl-btn primary" disabled={Boolean(busy)} onClick={() => { void act("seed_demo").then(() => setNotice("Loaded sample runs. Try \u201cLook for improvements\u201d to see the Lab propose a test.")); }}>Load sample data</button>
                 </div>
               </div>
@@ -458,7 +460,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
 
                 <div className="gl-card">
                   <h3>Current setup</h3>
-                  <p className="sub">What Entity uses right now · version {versionName(champion?.versionId)}</p>
+                  <p className="sub">What {entityName} uses right now · version {versionName(champion?.versionId)}</p>
                   <div className="gl-facts">
                     {describeSetup(policy).map((fact) => (
                       <div key={fact} className="gl-fact"><i />{fact}</div>
@@ -612,7 +614,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
             <div className="gl-page">
               <div className="gl-card">
                 <h3>Current setup</h3>
-                <p className="sub">What Entity uses right now{champion?.changeSummary ? ` · ${champion.changeSummary}` : ""}</p>
+                <p className="sub">What {entityName} uses right now{champion?.changeSummary ? ` · ${champion.changeSummary}` : ""}</p>
                 {champion ? <div style={{ margin: "0 0 10px" }}><IdChip label="version" value={champion.versionId} /></div> : null}
                 <div className="gl-facts">
                   {describeSetup(policy).map((fact) => (
@@ -636,7 +638,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                       </div>
                     ))}
                   </div>
-                ) : <p className="muted">No changes yet. Entity is on the original setup.</p>}
+                ) : <p className="muted">No changes yet. {entityName} is on the original setup.</p>}
 
                 {(canRevert || canUndoRevert) && (
                   <div className="gl-actions">

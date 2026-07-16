@@ -4097,7 +4097,7 @@ function Workspace() {
 
       <ApiXray open={xrayOpen} onClose={() => setXrayOpen(false)} models={models} />
 
-      <GondolaLab open={labOpen} onClose={() => setLabOpen(false)} agentId={activeAgentId} />
+      <GondolaLab open={labOpen} onClose={() => setLabOpen(false)} agentId={activeAgentId} entityName={agentName} />
 
       {lightbox && (
         <button className="media-lightbox" onClick={() => setLightbox(null)} aria-label="Close preview">

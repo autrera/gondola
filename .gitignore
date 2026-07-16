@@ -40,3 +40,7 @@ node_modules/
 
 # Read-only upstream reference clones for analysis (never shipped)
 references/
+
+# Internal analysis + working diagrams (kept local, never published)
+docs/reference-harness-analysis.md
+docs/diagrams/
