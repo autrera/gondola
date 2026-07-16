@@ -1129,7 +1129,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const runCommandTool: AgentTool = {
     name: "run_command",
     label: "Run a command",
-    description: "Run a terminal command on this Mac (for example npm, git, node, or a build script), returning its output. This is powerful, so it always requires the user's explicit confirmation (confirmed:true). Show the exact command and wait for a yes before running. Commands run with the user's own permissions; sudo and destructive disk operations are blocked.",
+    description: "Run a terminal command on this Mac (for example npm, git, node, or a build script), returning its output. This is powerful, so it always requires the user's explicit confirmation (confirmed:true). Show the exact command and wait for a yes before running. Commands run inside an OS sandbox: filesystem writes are confined to the workspace and temp, credential files are unreadable, and secrets are scrubbed from the environment; sudo and destructive disk operations are blocked.",
     parameters: Type.Object({
       command: Type.String({ minLength: 1, maxLength: 4_000, description: "The exact shell command to run." }),
       cwd: Type.Optional(Type.String({ maxLength: 1_024, description: "Working directory; defaults to the home folder." })),
@@ -1147,12 +1147,15 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       try {
         const result = await runCommand(input.command, input.cwd);
         const status = result.timedOut ? "timed out" : `exited with code ${result.exitCode}`;
+        const sandboxLine = result.sandboxed
+          ? "sandboxed: writes confined to the workspace, secrets scrubbed"
+          : `NOT sandboxed: ${result.sandboxNote ?? "no OS sandbox available"}`;
         const parts = [
-          `$ ${result.command}  (${status})`,
+          `$ ${result.command}  (${status}) [${sandboxLine}]`,
           result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : "",
           result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : "",
         ].filter(Boolean);
-        return { content: [{ type: "text", text: parts.join("\n\n") || "(no output)" }], details: { kind: "fs_command", ok: true, exitCode: result.exitCode, timedOut: result.timedOut } };
+        return { content: [{ type: "text", text: parts.join("\n\n") || "(no output)" }], details: { kind: "fs_command", ok: true, exitCode: result.exitCode, timedOut: result.timedOut, sandboxed: result.sandboxed } };
       } catch (error) {
         return fsError(error, "fs_command");
       }

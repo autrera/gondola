@@ -1,6 +1,7 @@
 import { access, copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
+import { sanitizedEnv, wrapCommandForSandbox, type SandboxMode } from "./sandbox";
 import os from "node:os";
 import path from "node:path";
 
@@ -273,11 +274,32 @@ function assertCommandAllowed(command: string): void {
   }
 }
 
+export interface RunCommandOptions {
+  /** OS sandbox mode: "auto" (sandbox if available), "enforce" (fail if not), "off". */
+  sandbox?: SandboxMode;
+  /** Allow the command network access (default true so npm/git still work). */
+  allowNetwork?: boolean;
+}
+
+export interface RunCommandResult {
+  command: string;
+  cwd: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  /** Whether the command ran inside an OS sandbox. */
+  sandboxed: boolean;
+  /** Present when the command could not be sandboxed (why). */
+  sandboxNote?: string;
+}
+
 export async function runCommand(
   command: string,
   cwdInput?: string,
   timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
-): Promise<{ command: string; cwd: string; exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  options: RunCommandOptions = {},
+): Promise<RunCommandResult> {
   const trimmed = String(command ?? "").trim();
   if (!trimmed) throw new Error("The command is empty.");
   assertCommandAllowed(trimmed);
@@ -286,8 +308,57 @@ export async function runCommand(
   if (!info?.isDirectory()) throw new Error("The working directory does not exist.");
   const limit = Math.min(Math.max(1_000, timeoutMs), MAX_COMMAND_TIMEOUT_MS);
 
+  // Confine the command to the workspace + temp, deny secret reads, and scrub
+  // secrets from its environment. The OS sandbox is the real boundary; the
+  // in-process allowlist above is belt-and-suspenders.
+  const env = sanitizedEnv() as NodeJS.ProcessEnv;
+  const wrapped = await wrapCommandForSandbox(trimmed, {
+    workspaceRoot: harnessRoot(),
+    writableRoots: [cwd],
+    mode: options.sandbox,
+    allowNetwork: options.allowNetwork,
+  });
+
+  let run = await spawnCollect(wrapped, cwd, env, limit);
+  let sandboxed = wrapped.sandboxed;
+  let sandboxNote = wrapped.note;
+  // Robustness: if the OS sandbox itself could not be applied (a nested or
+  // restricted environment where sandbox_apply is refused), the command never
+  // ran. Degrade to unsandboxed in every mode except "enforce" so real work
+  // still completes, with a clear note — rather than failing at the sandbox
+  // layer and looking like the command itself broke.
+  const sandboxLayerFailed = wrapped.sandboxed
+    && run.exitCode !== 0
+    && !run.stdout
+    && /sandbox-exec:|sandbox_apply|bwrap:/i.test(run.stderr);
+  if (sandboxLayerFailed && (options.sandbox ?? "auto") !== "enforce") {
+    run = await spawnCollect({ file: trimmed, args: [], useShell: true }, cwd, env, limit);
+    sandboxed = false;
+    sandboxNote = "Ran WITHOUT an OS sandbox: the sandbox could not be applied in this environment.";
+  }
+
+  return {
+    command: trimmed,
+    cwd,
+    exitCode: run.exitCode,
+    stdout: run.stdout,
+    stderr: run.stderr,
+    timedOut: run.timedOut,
+    sandboxed,
+    sandboxNote,
+  };
+}
+
+function spawnCollect(
+  spec: { file: string; args: string[]; useShell: boolean },
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  limit: number,
+): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(trimmed, { cwd, shell: true, env: process.env });
+    const child = spec.useShell
+      ? spawn(spec.file, { cwd, shell: true, env })
+      : spawn(spec.file, spec.args, { cwd, shell: false, env });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -296,13 +367,7 @@ export async function runCommand(
     child.stdout?.on("data", (chunk: Buffer) => { stdout = append(stdout, chunk); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = append(stderr, chunk); });
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, limit);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ command: trimmed, cwd, exitCode: null, stdout, stderr: stderr || String(error), timedOut });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ command: trimmed, cwd, exitCode: code, stdout, stderr, timedOut });
-    });
+    child.on("error", (error) => { clearTimeout(timer); resolve({ exitCode: null, stdout, stderr: stderr || String(error), timedOut }); });
+    child.on("close", (code) => { clearTimeout(timer); resolve({ exitCode: code, stdout, stderr, timedOut }); });
   });
 }
