@@ -7,6 +7,7 @@ import {
 import { USER_TIME_ZONE, currentDateTimeContext } from "./conversation";
 import { completeApiTrace, describeApiTraceError, describeVeniceRequest, startApiTrace, updateApiTrace, type ApiTraceUsage } from "./api-trace";
 import { observeBillingBalance } from "./billing-balance-state";
+import { resolveCredential } from "./credential-store";
 
 function safeHostname(url: string): string {
   try {
@@ -372,11 +373,14 @@ export class VeniceError extends Error {
 }
 
 export function getVeniceKey(): string {
-  const key = process.env.VENICE_API_KEY;
-  if (!key) {
+  // Single runtime chokepoint. Resolves env first (VENICE_API_KEY), then the
+  // local credential store (~/.gondola/credentials.json) so a key configured
+  // through onboarding powers the whole app without editing .env.local.
+  const resolved = resolveCredential("venice");
+  if (!resolved) {
     throw new VeniceError("VENICE_API_KEY is not configured", 500, null);
   }
-  return key;
+  return resolved.apiKey;
 }
 
 // Admin-scoped key for billing/usage endpoints (balance, usage analytics, key
