@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
 import { CloseIcon, TrashIcon } from "./Icons";
 import type {
   ConfigFieldDiff,
@@ -118,7 +118,7 @@ const CSS = `
 .gl-btn.danger { color: var(--coral); border-color: rgba(255,142,122,.3); }
 .gl-btn.ghost { background: transparent; color: var(--faint); }
 .gl-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
-.gl-table th, .gl-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.gl-table th, .gl-table td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; line-height: 1.45; }
 .gl-table th { color: var(--faint); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .gl-up { color: #8bbf9d; } .gl-down { color: var(--coral); }
 .gl-gate { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
@@ -138,6 +138,12 @@ const CSS = `
 .gl-id:hover { color: var(--ink); border-color: var(--line-bright); }
 .gl-tile.attn { border-color: rgba(139,191,157,.4); background: rgba(139,191,157,.05); }
 .gl-loading { display: grid; place-items: center; height: 100%; min-height: 240px; color: var(--faint); font-size: 13px; }
+.gl-skel { border-radius: 14px; background: linear-gradient(90deg, rgba(255,255,255,.03), rgba(255,255,255,.07), rgba(255,255,255,.03)); background-size: 200% 100%; animation: gl-shimmer 1.3s ease-in-out infinite; }
+@keyframes gl-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.gl-skel-tile { height: 74px; }
+.gl-skel-card { height: 150px; border-radius: 16px; }
+.gl-tab:focus-visible, .gl-btn:focus-visible, .gl-row-main:focus-visible, .gl-tile:focus-visible, .gl-id:focus-visible, .gl-close:focus-visible, .gl-approver:focus-visible, .gl-icon-btn:focus-visible { outline: 2px solid var(--aqua); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .gl-scrim, .gl-skel { animation: none; } }
 `;
 
 const STATUS_LABEL: Record<string, string> = {
@@ -160,8 +166,15 @@ const GATE_LABEL: Record<string, string> = {
   no_quality_regression: "Quality didn't drop",
 };
 
-function pct(value: number): string {
-  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+// Tolerate older/partial records that predate newer report fields, so the UI
+// never crashes on a missing number.
+function num(value: number | undefined | null): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function pct(value: number | undefined | null): string {
+  const safe = num(value);
+  return `${safe > 0 ? "+" : ""}${safe.toFixed(1)}%`;
 }
 
 function statusLabel(status: string): string {
@@ -206,6 +219,24 @@ function IdChip({ label, value }: { label?: string; value: string }) {
       {label ? `${label} ` : ""}{copied ? "copied" : value.slice(0, 8)}
     </button>
   );
+}
+
+// Resilience: a bad record in one view must never white-screen the whole Lab.
+// Keyed by tab so switching tabs (or reopening) recovers.
+class LabErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } { return { failed: true }; }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="gl-empty"><div className="gl-empty-inner">
+          <p>Something went wrong displaying this view.</p>
+          <p className="muted">Your Lab data is safe. Switch tabs or reopen the Lab.</p>
+        </div></div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaLabProps) {
@@ -373,9 +404,9 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
           <button className="gl-close" onClick={onClose} aria-label="Close Gondola Lab"><CloseIcon size={16} /></button>
         </header>
 
-        <nav className="gl-nav">
+        <nav className="gl-nav" role="tablist" aria-label="Gondola Lab sections">
           {tabs.map((entry) => (
-            <button key={entry.id} className={`gl-tab${tab === entry.id ? " is-active" : ""}`} onClick={() => setTab(entry.id)}>
+            <button key={entry.id} type="button" role="tab" aria-selected={tab === entry.id} className={`gl-tab${tab === entry.id ? " is-active" : ""}`} onClick={() => setTab(entry.id)}>
               {entry.label}{entry.badge ? <span className="gl-badge">{entry.badge}</span> : null}
             </button>
           ))}
@@ -385,8 +416,14 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
         {notice ? <div className="gl-notice">{notice}</div> : null}
 
         <div className="gl-content">
+          <LabErrorBoundary key={tab}>
           {!snapshot ? (
-            <div className="gl-loading">Loading the Lab</div>
+            <div className="gl-page" aria-busy="true">
+              <div className="gl-tiles">
+                {Array.from({ length: 6 }).map((_, index) => <div key={index} className="gl-skel gl-skel-tile" />)}
+              </div>
+              <div className="gl-skel gl-skel-card" />
+            </div>
           ) : (
           <>
           {/* Overview */}
@@ -470,7 +507,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
 
                     <h4>The idea</h4>
                     <p className="muted">{proposal.hypothesis}</p>
-                    <p className="muted">Based on {proposal.traceEvidence.length} run(s) · aims to improve {proposal.targetMetric.replace(/_/g, " ")} · {proposal.riskLevel} risk</p>
+                    <p className="muted">Based on {proposal.traceEvidence?.length ?? 0} run(s) · aims to improve {(proposal.targetMetric ?? "quality").replace(/_/g, " ")} · {proposal.riskLevel} risk</p>
                     <p className="muted">Created {new Date(proposal.createdAt).toLocaleString()}{detail?.evaluation ? <> · evaluation <IdChip value={detail.evaluation.evaluationId} /> · seed {detail.evaluation.seed}</> : null}</p>
                     {proposal.proposerFeedback ? <p className="muted">Prior context: {proposal.proposerFeedback}</p> : null}
 
@@ -496,15 +533,15 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
                     {report ? (
                       <>
                         <h4>Result</h4>
-                        <p className="muted">Judged on <strong>{report.targetMetric.replace(/_/g, " ")}</strong>: {pct(report.targetImprovementPct)} {report.targetImprovementPct >= 0 ? "better" : "worse"}.</p>
+                        <p className="muted">Judged on <strong>{(report.targetMetric ?? "quality").replace(/_/g, " ")}</strong>: {pct(report.targetImprovementPct)} {num(report.targetImprovementPct) >= 0 ? "better" : "worse"}.</p>
                         <table className="gl-table">
-                          <thead><tr><th>Measure</th><th>Now</th><th>Variation</th><th>Δ</th></tr></thead>
+                          <thead><tr><th scope="col">Measure</th><th scope="col">Now</th><th scope="col">Variation</th><th scope="col">Δ</th></tr></thead>
                           <tbody>
-                            <tr><td>Quality</td><td>{report.championQuality.toFixed(1)}</td><td>{report.challengerQuality.toFixed(1)}</td><td className={report.qualityDeltaPct >= 0 ? "gl-up" : "gl-down"}>{pct(report.qualityDeltaPct)}</td></tr>
-                            <tr><td>Completion</td><td>{report.championCompletionPct.toFixed(0)}%</td><td>{report.challengerCompletionPct.toFixed(0)}%</td><td className={report.challengerCompletionPct >= report.championCompletionPct ? "gl-up" : "gl-down"}>{(report.challengerCompletionPct - report.championCompletionPct).toFixed(0)} pts</td></tr>
-                            <tr><td>Held-out (auto checks)</td><td>{report.championHeldOutPassRate.toFixed(0)}%</td><td>{report.challengerHeldOutPassRate.toFixed(0)}%</td><td className={report.challengerHeldOutPassRate >= report.championHeldOutPassRate ? "gl-up" : "gl-down"}>{(report.challengerHeldOutPassRate - report.championHeldOutPassRate).toFixed(0)} pts</td></tr>
-                            <tr><td>Cost (total)</td><td>${report.championCost.toFixed(2)}</td><td>${report.challengerCost.toFixed(2)}</td><td className={report.costDeltaPct <= 0 ? "gl-up" : "gl-down"}>{pct(report.costDeltaPct)}</td></tr>
-                            <tr><td>Human interventions</td><td>{report.championInterventions}</td><td>{report.challengerInterventions}</td><td /></tr>
+                            <tr><td>Quality</td><td>{num(report.championQuality).toFixed(1)}</td><td>{num(report.challengerQuality).toFixed(1)}</td><td className={num(report.qualityDeltaPct) >= 0 ? "gl-up" : "gl-down"}>{pct(report.qualityDeltaPct)}</td></tr>
+                            <tr><td>Completion</td><td>{num(report.championCompletionPct).toFixed(0)}%</td><td>{num(report.challengerCompletionPct).toFixed(0)}%</td><td className={num(report.challengerCompletionPct) >= num(report.championCompletionPct) ? "gl-up" : "gl-down"}>{(num(report.challengerCompletionPct) - num(report.championCompletionPct)).toFixed(0)} pts</td></tr>
+                            <tr><td>Held-out (auto checks)</td><td>{num(report.championHeldOutPassRate).toFixed(0)}%</td><td>{num(report.challengerHeldOutPassRate).toFixed(0)}%</td><td className={num(report.challengerHeldOutPassRate) >= num(report.championHeldOutPassRate) ? "gl-up" : "gl-down"}>{(num(report.challengerHeldOutPassRate) - num(report.championHeldOutPassRate)).toFixed(0)} pts</td></tr>
+                            <tr><td>Cost (total)</td><td>${num(report.championCost).toFixed(2)}</td><td>${num(report.challengerCost).toFixed(2)}</td><td className={num(report.costDeltaPct) <= 0 ? "gl-up" : "gl-down"}>{pct(report.costDeltaPct)}</td></tr>
+                            <tr><td>Human interventions</td><td>{num(report.championInterventions)}</td><td>{num(report.challengerInterventions)}</td><td /></tr>
                           </tbody>
                         </table>
 
@@ -669,6 +706,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
           )}
           </>
           )}
+          </LabErrorBoundary>
         </div>
       </section>
     </div>
