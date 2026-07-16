@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveChatModelRequest, routeModel, routeModelLive, toModelCapability, usableChatModels, type ModelCapability } from "./model-registry";
+import { modelsByKind, resolveChatModelRequest, routeModel, routeModelLive, toModelCapability, usableChatModels, type ModelCapability } from "./model-registry";
 
 const textFast: ModelCapability = {
   id: "fast-text", provider: "venice", type: "text",
@@ -65,6 +65,14 @@ test("routeModelLive uses the cached registry and returns an explainable pick", 
 
 test("usableChatModels keeps only tool-capable text models", () => {
   assert.deepEqual(usableChatModels(registry).map((model) => model.id).sort(), ["fast-text", "smart-text"]);
+});
+
+test("modelsByKind filters the live catalog per capability", () => {
+  assert.deepEqual(modelsByKind(registry, "chat").map((model) => model.id).sort(), ["fast-text", "smart-text"]);
+  assert.deepEqual(modelsByKind(registry, "image").map((model) => model.id), ["image-1"]);
+  // The base registry has no video/music/speech/embedding models.
+  assert.deepEqual(modelsByKind(registry, "video"), []);
+  assert.deepEqual(modelsByKind(registry, "embedding"), []);
 });
 
 test("resolveChatModelRequest reports a foreign provider and offers real alternatives", () => {

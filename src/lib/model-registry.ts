@@ -268,6 +268,32 @@ export function usableChatModels(models: ModelCapability[]): ModelCapability[] {
     && model.supportsTools);
 }
 
+export type ModelKind = "chat" | "image" | "video" | "music" | "speech" | "embedding";
+
+/**
+ * The live Venice models for a capability, so the agent can tell the user what
+ * actually exists instead of naming model families from memory. "chat" is the
+ * tool-capable text models it can run on; the rest filter by output modality.
+ */
+export function modelsByKind(models: ModelCapability[], kind: ModelKind): ModelCapability[] {
+  switch (kind) {
+    case "chat":
+      return usableChatModels(models);
+    case "image":
+      return models.filter((model) => model.modalities.output.includes("image"));
+    case "video":
+      return models.filter((model) => model.modalities.output.includes("video"));
+    case "music":
+      return models.filter((model) => model.type === "music");
+    case "speech":
+      return models.filter((model) => model.type === "tts" || model.type === "asr");
+    case "embedding":
+      return models.filter((model) => model.modalities.output.includes("embedding"));
+    default:
+      return [];
+  }
+}
+
 export interface ChatModelResolution {
   /** The resolved model, when the request maps to a real Venice chat model. */
   model?: ModelCapability;

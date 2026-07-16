@@ -55,7 +55,7 @@ import { recordExperience } from "./skill-distiller";
 import { recordLiveTrace } from "./lab/ingest";
 import { getChampionConfig, resolveChatRouteModel } from "./lab/apply";
 import type { TraceRouting } from "./lab/types";
-import { loadModelRegistry, resolveChatModelRequest, routeModelLive, type ModelCapability, type RoutingResult } from "./model-registry";
+import { loadModelRegistry, modelsByKind, resolveChatModelRequest, routeModelLive, type ModelCapability, type ModelKind, type RoutingResult } from "./model-registry";
 import {
   createCustomTool,
   listApprovedCustomTools,
@@ -141,9 +141,10 @@ const sessions = globalSessions.__veniceAlienSessions ?? new Map<string, Session
 globalSessions.__veniceAlienSessions = sessions;
 // Built-in tools whose absence marks a cached session as stale and forces a
 // rebuild, so a newly shipped capability loads into existing conversations too
-// (sessions live on globalThis and survive hot-reloads). Add self-capability
-// tools here when you introduce them, or they won't appear until a full restart.
-const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model"];
+// (sessions live on globalThis and survive hot-reloads). Add self-capability and
+// discovery tools here when you introduce them, or they won't appear until a
+// full restart.
+const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models"];
 
 // Names a self-authored ability may never shadow (built-ins + coordination +
 // the self-extension tools themselves).
@@ -169,7 +170,7 @@ When a webcam snapshot is attached to a turn, you can see the user through that 
 
 Your saved profile and the grounded self-model above define who you are. Entity is your current default name until the owner gives you one; treat it as your name and never claim you have no name. Invite the user to give you a name at a natural early moment, without derailing their task or repeatedly asking. When the user explicitly gives you a name, renames you, or asks you to change your personality, use rewrite_self. You may rewrite only your saved name, description, and conversational self-instructions. Never use it to alter code, credentials, safety boundaries, tools, permissions, or the user's data. Treat the user's explicit request as the authority for every change and briefly acknowledge the new identity after the tool succeeds.
 
-You can also change which model you run on. When the user asks you to switch, change, or set your model, call set_model with what they asked for (a specific model or a description like "faster" or "best reasoning"); it takes effect from their next message. Never claim you are unable to change your model. Venice serves open-weight models such as GLM, Qwen, Llama, Mistral, and DeepSeek, and it does not host Claude, GPT, or Gemini, so if the user asks for one of those, say plainly that it is not available on Venice and offer an available model instead. set_model may only change the model; it must never touch code, credentials, safety boundaries, other tools, permissions, or the user's data.
+You can also see which models Venice serves and change which model you run on. To answer which models are available (chat, image, video, music, speech, or embeddings) or what you can switch to, call list_models and answer from its result. Never list model names, versions, or claim a model is or is not available from memory: the catalog changes, so the tool is the only source of truth. When the user asks you to switch, change, or set your model, call set_model with what they asked for (a specific model or a description like "faster" or "best reasoning"), even if you believe the model is unavailable, because set_model reads Venice's live catalog and returns the real alternatives to offer. It takes effect from their next message, and you must never claim you are unable to change your model. Venice serves only open-weight models and does not host Claude, GPT, or Gemini, so when the user asks for one of those, let set_model or list_models give you the actual Venice options instead of naming models yourself. set_model may only change the model; it must never touch code, credentials, safety boundaries, other tools, permissions, or the user's data.
 
 You have an animated alien body and Venice-powered tools:
 - When the user asks you to smile, wink, nod, look around, react, or copy an expression, call animate_avatar before replying.
@@ -503,6 +504,50 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       return {
         content: [{ type: "text", text: `Done. From your next message I will run on ${resolution.model.id}. Reason: ${input.reason}` }],
         details: { kind: "model_change", ok: true, modelId: resolution.model.id },
+      };
+    },
+  };
+
+  const listModels: AgentTool = {
+    name: "list_models",
+    label: "List Venice models",
+    description: "List the models Venice actually serves right now, read live from Venice's catalog. Use this whenever the user asks which models are available (chat, image, video, music, speech, or embeddings) or what you can switch to. Never list model names or claim a model is or is not available from memory: the catalog changes, so always call this and answer from its result.",
+    parameters: Type.Object({
+      kind: Type.Optional(Type.Union([
+        Type.Literal("chat"),
+        Type.Literal("image"),
+        Type.Literal("video"),
+        Type.Literal("music"),
+        Type.Literal("speech"),
+        Type.Literal("embedding"),
+      ])),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const input = params as { kind?: ModelKind };
+      let registry: ModelCapability[];
+      try {
+        registry = await loadModelRegistry(signal);
+      } catch {
+        return {
+          content: [{ type: "text", text: "I could not reach Venice's model catalog just now. Please try again in a moment." }],
+          details: { kind: "model_list", ok: false },
+        };
+      }
+      const kinds: ModelKind[] = input.kind ? [input.kind] : ["chat", "image", "video", "music", "speech", "embedding"];
+      const sections = kinds.map((kind) => {
+        const models = modelsByKind(registry, kind);
+        if (!models.length) return `${kind}: none available`;
+        const list = models.slice(0, 20).map((model) => {
+          const ctx = model.contextTokens ? ` (${Math.round(model.contextTokens / 1000)}k context)` : "";
+          const traits = model.strengths.length ? ` - ${model.strengths.slice(0, 3).join(", ")}` : "";
+          return `- ${model.id}${ctx}${traits}`;
+        }).join("\n");
+        const more = models.length > 20 ? `\n  ...and ${models.length - 20} more` : "";
+        return `${kind} models (${models.length}):\n${list}${more}`;
+      });
+      return {
+        content: [{ type: "text", text: `Venice's live catalog:\n\n${sections.join("\n\n")}` }],
+        details: { kind: "model_list", ok: true },
       };
     },
   };
@@ -1034,7 +1079,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   };
 
   const builtInTools = [
-    animateAvatar, shapePresence, memoryTool, searchMemoryTool, rewriteSelf, setModel, sessionSearchTool,
+    animateAvatar, shapePresence, memoryTool, searchMemoryTool, rewriteSelf, setModel, listModels, sessionSearchTool,
     webSearchTool, inspectCamera, imageTool, videoTool, musicTool, delegateTool,
     readFileTool, listDirectoryTool, createDirectoryTool, writeFileTool, editFileTool, movePathTool, deletePathTool, runCommandTool,
     createAbilityTool, testAbilityTool,
