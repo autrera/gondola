@@ -107,6 +107,14 @@ test("the proposal generator cannot modify evaluation cases", async () => {
   assert.deepEqual(CASE_REGISTRY, snapshot);
 });
 
+test("generateProposal does not create the same proposal twice", async () => {
+  await seedDemo();
+  const first = await generateProposal();
+  assert.ok(first, "the first proposal should be generated");
+  const second = await generateProposal();
+  assert.equal(second, null, "the same change must not be proposed twice");
+});
+
 test("the candidate cannot modify graders or promotion thresholds", () => {
   assert.throws(() => assertAllowedProposalCategory("grader_prompts"));
   assert.throws(() => assertAllowedProposalCategory("promotion_thresholds"));

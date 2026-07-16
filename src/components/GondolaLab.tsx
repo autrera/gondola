@@ -108,6 +108,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
   const [detail, setDetail] = useState<ProposalDetail | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [approver, setApprover] = useState("");
   const [live, setLive] = useState(false);
   const [abilities, setAbilities] = useState<Ability[]>([]);
@@ -165,6 +166,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
   const act = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
     setBusy(action);
     setError("");
+    setNotice("");
     try {
       const response = await fetch("/api/lab", {
         method: "POST",
@@ -173,7 +175,10 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
       });
       const payload = await response.json().catch(() => ({})) as { error?: string; proposal?: ImprovementProposal | null };
       if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status}).`);
-      if (action === "generate_proposal" && payload.proposal) setSelected(payload.proposal.proposalId);
+      if (action === "generate_proposal") {
+        if (payload.proposal) setSelected(payload.proposal.proposalId);
+        else setNotice("No new suggestions right now.");
+      }
       await loadSnapshot();
       if (selected) await loadDetail(selected);
       return payload;
@@ -223,6 +228,7 @@ export function GondolaLab({ open, onClose, agentId = "nova-default" }: GondolaL
         </div>
 
         {error ? <div className="gl-err">{error}</div> : null}
+        {notice ? <div style={{ padding: "4px 14px 8px", fontSize: "12px", opacity: 0.7 }}>{notice}</div> : null}
 
         <div className="gl-body">
           <div className="gl-rail">
