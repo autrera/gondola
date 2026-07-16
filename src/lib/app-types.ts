@@ -127,7 +127,6 @@ export interface MediaArtifact {
   url?: string;
   model?: string;
   queueId?: string;
-  taskId?: string;
   downloadUrl?: string;
   quote?: number;
   progress?: number;
@@ -136,6 +135,8 @@ export interface MediaArtifact {
   resolution?: string;
   soundtrack?: "none" | "natural" | "music";
   audioDirection?: string;
+  taskId?: string;
+  assetId?: string;
 }
 
 export interface CatalogModel {
