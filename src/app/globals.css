@@ -7543,10 +7543,38 @@ input:focus-visible {
 .onb-cap-text strong { display: block; font-size: 13px; }
 .onb-cap-text small { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
 
-.onb-toggle { display: flex; align-items: flex-start; gap: 11px; padding: 6px 0; cursor: pointer; }
-.onb-toggle input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--mint); }
+.onb-toggle-group { display: flex; flex-direction: column; gap: 10px; }
+.onb-toggle {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.onb-toggle:hover { border-color: var(--line-bright); }
+.onb-toggle:has(input:checked) { border-color: rgba(159, 183, 210, 0.4); background: rgba(159, 183, 210, 0.06); }
+.onb-toggle input {
+  appearance: none; -webkit-appearance: none;
+  margin: 1px 0 0; flex: none;
+  width: 18px; height: 18px;
+  border: 1px solid var(--line-bright); border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  display: grid; place-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.onb-toggle input::before {
+  content: ""; width: 11px; height: 11px;
+  transform: scale(0);
+  background: var(--mint);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transition: transform 0.12s ease;
+}
+.onb-toggle input:checked { border-color: var(--mint); background: rgba(159, 183, 210, 0.14); }
+.onb-toggle input:checked::before { transform: scale(1); }
 .onb-toggle strong { display: block; font-size: 14px; }
-.onb-toggle small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.onb-toggle small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.4; }
 
 .onb-intro {
   background: rgba(0, 0, 0, 0.28); border: 1px solid var(--line-bright);

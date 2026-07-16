@@ -283,14 +283,16 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
               <input type="text" placeholder="~/projects/my-workspace" value={workspaceFolder} onChange={(event) => setWorkspaceFolder(event.target.value)} />
             </label>
 
-            <label className="onb-toggle">
-              <input type="checkbox" checked={fileAccess} onChange={(event) => setFileAccess(event.target.checked)} />
-              <span><strong>File access</strong><small>Let Gondola read and edit files in the workspace</small></span>
-            </label>
-            <label className="onb-toggle">
-              <input type="checkbox" checked={shellAccess} onChange={(event) => setShellAccess(event.target.checked)} />
-              <span><strong>Terminal access</strong><small>Let Gondola run commands (with confirmation)</small></span>
-            </label>
+            <div className="onb-toggle-group">
+              <label className="onb-toggle">
+                <input type="checkbox" checked={fileAccess} onChange={(event) => setFileAccess(event.target.checked)} />
+                <span><strong>File access</strong><small>Let Gondola read and edit files in the workspace</small></span>
+              </label>
+              <label className="onb-toggle">
+                <input type="checkbox" checked={shellAccess} onChange={(event) => setShellAccess(event.target.checked)} />
+                <span><strong>Terminal access</strong><small>Let Gondola run commands (with confirmation)</small></span>
+              </label>
+            </div>
 
             <label className="onb-field">
               <span>Confirmation policy</span>
