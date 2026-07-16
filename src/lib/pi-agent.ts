@@ -53,6 +53,7 @@ import {
   getMediaTaskByProviderId,
   listMediaTasks,
   resumePendingMediaTasks,
+  selectResumableTasks,
   toTaskStatusView,
 } from "./media-tasks";
 import { buildRuntimeSnapshot } from "./runtime-snapshot";
@@ -2031,6 +2032,17 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         return text ? [{ role: message.role as "user" | "assistant", text }] : [];
       })
       .slice(-6);
+    // Resume context: media jobs still queued for this conversation, and the
+    // last checkpoint. These let the supervisor resume polling or offer to
+    // continue from a checkpoint instead of only explaining what broke.
+    const resumableTasks = selectResumableTasks(
+      await listMediaTasks({ limit: 50 }).catch(() => []),
+      { conversationId: input.sessionId },
+    );
+    const execForRecovery = await getExecutionState(input.sessionId).catch(() => null);
+    const lastCheckpointEntry = execForRecovery?.checkpoints?.length
+      ? execForRecovery.checkpoints[execForRecovery.checkpoints.length - 1]
+      : null;
     const recovery = await runSupervisorRecovery({
       message: input.message,
       lastError,
@@ -2038,6 +2050,10 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
       emit: session.runtime.emit,
       signal: input.signal,
       context: recentContext,
+      pendingMedia: resumableTasks.length,
+      lastCheckpoint: lastCheckpointEntry
+        ? { label: lastCheckpointEntry.label, createdAt: lastCheckpointEntry.createdAt }
+        : null,
     });
     // Record the failed turn WITH the supervisor's diagnosis: repeated failure
     // categories are exactly what the Lab's reviewer aggregates to propose a
@@ -2061,6 +2077,12 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
         recoveredBySupervisor: recovery.recovered,
       });
     })().catch(() => undefined);
+    // Durable failure checkpoint so the next turn is resume-aware (Phase 3).
+    await addExecutionCheckpoint(input.sessionId, `turn:failed (${recovery.category})`, {
+      strategy: recovery.strategy,
+      recovered: recovery.recovered,
+      pendingMedia: resumableTasks.length,
+    }).catch(() => undefined);
     if (recovery.text) {
       await appendSessionRecord({
         sessionId: input.sessionId,
