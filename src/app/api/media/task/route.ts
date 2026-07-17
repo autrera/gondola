@@ -1,5 +1,5 @@
 import { rejectUntrustedLocalRequest } from "@/lib/request-security";
-import { awaitMediaTask, getMediaTask, toTaskStatusView } from "@/lib/media-tasks";
+import { awaitMediaTask, getMediaTask, listConversationTasks, toTaskStatusView } from "@/lib/media-tasks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +12,21 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const rejected = rejectUntrustedLocalRequest(request);
   if (rejected) return rejected;
-  const id = new URL(request.url).searchParams.get("id");
+  const params = new URL(request.url).searchParams;
+  const id = params.get("id");
+  const conversationId = params.get("conversationId");
+
+  // List mode: every media job for a conversation, so the chat can show the
+  // queue. Drives retrieval on in-flight jobs so they keep progressing/deliver.
+  if (!id && conversationId) {
+    const tasks = await listConversationTasks(conversationId);
+    for (const task of tasks) {
+      if (task.status === "queued" || task.status === "running") void awaitMediaTask(task.id).catch(() => undefined);
+    }
+    const fresh = await listConversationTasks(conversationId);
+    return Response.json({ tasks: fresh.map(toTaskStatusView) }, { headers: { "Cache-Control": "no-store" } });
+  }
+
   if (!id) return Response.json({ error: "A task id is required" }, { status: 400 });
 
   const task = await getMediaTask(id);
