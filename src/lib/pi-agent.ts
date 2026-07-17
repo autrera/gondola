@@ -43,6 +43,7 @@ import { DEFAULT_AGENT_ID, getAgentRuntime, getConversation, updateAgent, type M
 import {
   analyzeFramesFast,
   generateImage,
+  type ImageAspect,
   quoteAndQueueMusic,
   quoteAndQueueVideo,
   searchWeb,
@@ -269,8 +270,9 @@ You have an animated alien body and Venice-powered tools:
 - When the user asks you to smile, wink, nod, look around, react, or copy an expression, call animate_avatar before replying.
 - You can freely shape your abstract on-screen presence with shape_presence. Use it when a response has a clear emotional or creative character: choose a form, palette, motion, direction, and intensity that support what you are saying. Vary it tastefully; avoid frantic changes or literal facial features.
 - When the user asks what you see, what expression or gesture they are making, or asks you to look at them, call inspect_camera. Never claim to see a live continuous feed; you see the latest submitted frame.
-- When the user requests an image, call generate_image.
-- When the user requests a video, first establish a compact creative brief in one natural question: desired length, standard or high quality, and whether it should have no audio, natural sound, or music (including the music mood). Do not call generate_video until those choices are known or the user explicitly accepts your suggested defaults. Then call generate_video. The tool quotes first and queues automatically below the configured limit. If it returns quoted, state the exact price once and ask for confirmation. Set confirmed=true only after the user explicitly confirms that price and preserve the same brief on the confirmed call.
+- When the user requests an image, call generate_image. Choose aspectRatio from where it will be used, without being told: Instagram Reels/Stories, TikTok, phone wallpaper, or any "vertical/portrait" ask -> portrait (9:16); video covers, thumbnails, slides, or "landscape/widescreen" -> landscape (16:9); website or hero banners -> wide (4:1); otherwise square. You control the shape and the result renders inline; never claim you can only make squares, cannot set dimensions, or that an image can only be delivered as a file.
+- Media platform shorthand you must apply automatically: "Instagram", "Reels", "Stories", "TikTok", "Shorts" all mean vertical 9:16; "YouTube", "thumbnail", "banner", "cover" mean wide/landscape. Set the matching aspect ratio on the very first generation rather than making a square or 16:9 default and waiting to be corrected.
+- When the user requests a video, first establish a compact creative brief in one natural question: desired length, standard or high quality, and whether it should have no audio, natural sound, or music (including the music mood). Infer aspect_ratio from the destination the same way (Reels/Stories/TikTok -> 9:16, otherwise 16:9) and confirm it in the brief rather than defaulting silently. Do not call generate_video until those choices are known or the user explicitly accepts your suggested defaults. Then call generate_video. The tool quotes first and queues automatically below the configured limit. If it returns quoted, state the exact price once and ask for confirmation. Set confirmed=true only after the user explicitly confirms that price and preserve the same brief on the confirmed call.
 - When the user requests music or a soundscape, use generate_music with the same confirmation rule.
 - Video and music are asynchronous: generate_video and generate_music return a queued job, not a finished file. In a normal chat turn the interface auto-delivers a video you queued. For anything else - a job you queued through the raw API, one a worker queued, or when the user asks you to fetch, re-check, or "show" a video - call media_task_list to read the true status and media_task_await (with the taskId, or queueId+model+kind) to wait for it and deliver the finished file into the chat. Always create media through generate_video/generate_music rather than the raw venice_api so the job is tracked and deliverable. If a generation call fails (for example an image-to-video 400), recover by retrying through generate_video itself (for instance with source_image none for text-to-video); do not switch to the raw venice_api to make or fetch media. Never download media with curl or save it to disk in order to show it - inline rendering happens automatically through generate_video and media_task_await. Never say a video is ready, delivered, or retrieved unless media_task_list shows it succeeded or media_task_await returned it; if it is still rendering, say exactly that.
 - Queued video and music jobs render asynchronously: the finished media is delivered into the chat automatically when it is ready, and you can also check status or fetch the result yourself with venice_api (for example GET /video/retrieve or /audio/retrieve with the job/request id from the queue response). If a job seems stuck or you need the file to organize or verify it, retrieve it; never tell the user you cannot check or retrieve a queued job.
@@ -794,15 +796,21 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const imageTool: AgentTool = {
     name: "generate_image",
     label: "Generate image",
-    description: "Generate an image with the selected Venice image model.",
+    description: "Generate an image with the selected Venice image model. It renders inline in the chat. Set aspectRatio to match where the image will be used: square (default), portrait (9:16 - Instagram Reels/Stories, TikTok, phone wallpaper), landscape (16:9 - video covers, slides, thumbnails), or wide (4:1 - website/hero banners). You fully control the shape here; never say you can only make squares or cannot set dimensions.",
     parameters: Type.Object({
       prompt: Type.String({ minLength: 3, maxLength: 1500 }),
       title: Type.Optional(Type.String({ maxLength: 80 })),
+      aspectRatio: Type.Optional(Type.Union([
+        Type.Literal("square"),
+        Type.Literal("portrait"),
+        Type.Literal("landscape"),
+        Type.Literal("wide"),
+      ])),
     }),
     async execute(_toolCallId, params, signal) {
-      const input = params as { prompt: string; title?: string };
+      const input = params as { prompt: string; title?: string; aspectRatio?: ImageAspect };
       const prompt = input.prompt;
-      const result = await generateImage(prompt, runtime.settings.imageModel, signal);
+      const result = await generateImage(prompt, runtime.settings.imageModel, signal, input.aspectRatio ?? "square");
       // Remember it so the user can ask to animate "the image you just made".
       runtime.lastGeneratedImageUrl = result.dataUrl;
       return {
@@ -829,6 +837,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       duration: Type.Union([Type.Literal("5s"), Type.Literal("10s"), Type.Literal("15s")]),
       quality: Type.Union([Type.Literal("standard"), Type.Literal("high")]),
       soundtrack: Type.Union([Type.Literal("none"), Type.Literal("natural"), Type.Literal("music")]),
+      aspect_ratio: Type.Optional(Type.Union([Type.Literal("16:9"), Type.Literal("9:16"), Type.Literal("1:1")])),
       source_image: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("attachment"), Type.Literal("generated")])),
       audio_direction: Type.Optional(Type.String({ maxLength: 500 })),
       confirmed: Type.Optional(Type.Boolean()),
@@ -840,6 +849,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
         duration: "5s" | "10s" | "15s";
         quality: "standard" | "high";
         soundtrack: "none" | "natural" | "music";
+        aspect_ratio?: "16:9" | "9:16" | "1:1";
         source_image?: "none" | "attachment" | "generated";
         audio_direction?: string;
         confirmed?: boolean;
@@ -863,6 +873,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
           quality: input.quality,
           soundtrack: input.soundtrack,
           audioDirection: input.audio_direction,
+          aspectRatio: input.aspect_ratio,
           referenceImageUrls,
         },
         input.confirmed === true,
