@@ -93,6 +93,7 @@ import { recordLiveTrace } from "./lab/ingest";
 import { getChampionConfig, resolveChatRouteModel } from "./lab/apply";
 import { policyPromptBlock } from "./lab/policy";
 import { generateProposal, recentFailureSummary } from "./lab/service";
+import { recordFlag } from "./lab/flags";
 import { runSupervisorRecovery } from "./supervisor";
 import type { TraceRouting } from "./lab/types";
 import { loadModelRegistry, modelsByKind, resolveChatModelRequest, routeModelLive, type ModelCapability, type ModelKind, type RoutingResult } from "./model-registry";
@@ -672,23 +673,27 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
   const proposeHarnessChange: AgentTool = {
     name: "propose_harness_change",
     label: "Propose a harness improvement",
-    description: "Flag a recurring problem to Gondola Lab, your external control plane, so it can review recent run traces and draft a bounded, testable configuration change. Use this only for a repeated failure or inefficiency in how you are set up, not a one-off. You cannot evaluate, approve, or apply changes yourself: the Lab evaluates independently and a human (or its opt-in autopilot) decides. This is safe: it only asks the Lab to look, and never changes your configuration by itself.",
+    description: "Flag a problem to Gondola Lab, your external control plane. It is always recorded (even if no bounded change can be drafted yet) and coalesced with prior flags of the same problem, so a recurring failure accumulates a count the Lab and the owner can see. Use it for a repeated failure or inefficiency in how you are set up. You cannot evaluate, approve, or apply changes yourself; the Lab evaluates independently and a human (or its opt-in autopilot) decides.",
     parameters: Type.Object({
-      reason: Type.String({ minLength: 3, maxLength: 240 }),
+      reason: Type.String({ minLength: 3, maxLength: 600 }),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params) {
       const input = params as { reason: string };
       const proposal = await generateProposal(input.reason, { modelReview: true }).catch(() => null);
+      // Always record the flag so it is never silently dropped; coalesces with
+      // prior flags of the same problem and returns the running count.
+      const flag = await recordFlag({ reason: input.reason, conversationId: runtime.sessionId, proposalDrafted: Boolean(proposal) }).catch(() => undefined);
+      const seen = flag && flag.count > 1 ? ` This problem has now been flagged ${flag.count} times.` : "";
       if (!proposal) {
         return {
-          content: [{ type: "text", text: "I flagged this to Gondola Lab, but it did not find a new, bounded change to propose from recent traces right now." }],
-          details: { kind: "harness_proposal", created: false },
+          content: [{ type: "text", text: `Logged to Gondola Lab as an open observation.${seen} The Lab did not find a bounded, testable change to draft from the current evidence, but it is recorded and visible in the Lab, not discarded.` }],
+          details: { kind: "harness_proposal", created: false, flagId: flag?.id, flagCount: flag?.count },
         };
       }
       return {
-        content: [{ type: "text", text: `I flagged this to Gondola Lab and it drafted a proposal: ${proposal.observedProblem} It will be evaluated before anything changes. Reason: ${input.reason}` }],
-        details: { kind: "harness_proposal", created: true, proposalId: proposal.proposalId },
+        content: [{ type: "text", text: `Flagged to Gondola Lab, which drafted a proposal: ${proposal.observedProblem} It will be evaluated before anything changes.${seen}` }],
+        details: { kind: "harness_proposal", created: true, proposalId: proposal.proposalId, flagId: flag?.id, flagCount: flag?.count },
       };
     },
   };
