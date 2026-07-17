@@ -491,6 +491,17 @@ export async function veniceFetch(
   throw lastError instanceof Error ? lastError : new Error("Venice request failed");
 }
 
+// Bound a request so a hung Venice call can never hang a whole turn. Combines
+// the caller's signal (user cancel) with a hard timeout: a user abort still
+// stops the turn silently, while a timeout surfaces as a normal failure the
+// supervisor can explain and recover from. Every long external call goes
+// through this - the reference harnesses all bound each unit of work the same
+// way (codex-plugin's waitForSingleJobSnapshot, Hermes' recover_abandoned).
+export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export async function veniceJson<T>(
   path: string,
   body: Record<string, unknown>,
@@ -971,7 +982,9 @@ export async function generateImage(
       safe_mode: true,
       hide_watermark: false,
     },
-    signal,
+    // Image generation is synchronous and renders inline; without a bound it
+    // could hang the turn forever (the "it started an image and forgot" bug).
+    withTimeout(signal, 120_000),
   );
   const image = response.images?.[0];
   if (!image) throw new Error("Venice image generation returned no image");
@@ -1039,7 +1052,7 @@ export async function quoteAndQueueVideo(
         // source image and return a 400 if aspect_ratio is sent; only text-to-
         // video (no source image) accepts it.
         ...(mode === "text" ? { aspect_ratio: aspectRatio } : {}),
-      }, signal);
+      }, withTimeout(signal, 30_000));
       model = candidate;
       break;
     } catch (error) {
@@ -1078,7 +1091,7 @@ export async function quoteAndQueueVideo(
       ...(mode === "image" && sourceImage ? { image_url: sourceImage } : {}),
       ...(mode === "reference" ? { reference_image_urls: referenceImages } : {}),
     },
-    signal,
+    withTimeout(signal, 45_000),
   );
   return {
     kind: "video",
@@ -1106,7 +1119,7 @@ export async function quoteAndQueueMusic(
   const quote = await veniceJson<{ quote: number }>(
     "/audio/quote",
     { model: settings.musicModel, duration_seconds: durationSeconds },
-    signal,
+    withTimeout(signal, 30_000),
   );
   if (quote.quote > settings.maxMediaUsd && !confirmed) {
     return {
@@ -1125,7 +1138,7 @@ export async function quoteAndQueueMusic(
       prompt,
       duration_seconds: durationSeconds,
     },
-    signal,
+    withTimeout(signal, 45_000),
   );
   return {
     kind: "music",
