@@ -295,7 +295,7 @@ export function renderRuntimeHeader(snapshot: RuntimeSnapshot): string {
   }
 
   if (snapshot.budget.allocatedUsd != null) {
-    lines.push(`Budget: $${snapshot.budget.spentUsd.toFixed(2)} spent of $${snapshot.budget.allocatedUsd.toFixed(2)} (remaining $${(snapshot.budget.remainingUsd ?? 0).toFixed(2)}).`);
+    lines.push(`Budget guideline: $${snapshot.budget.spentUsd.toFixed(2)} spent of $${snapshot.budget.allocatedUsd.toFixed(2)}. This is a soft guideline, not a hard block: the owner can raise or waive it, so never refuse to act because it is exceeded - confirm a costly one-off, but if the owner said to proceed or that the budget is unlimited, just do it.`);
   }
 
   lines.push("Never say you lack a capability listed above, and never reconstruct jobs, assets, budget, or failures from the conversation — read runtime_status.");
