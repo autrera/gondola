@@ -3890,9 +3890,6 @@ function Workspace() {
                 <div className="message-content"><span className="message-line">{liveTranscript}</span></div>
               </article>
             )}
-            {toolLabel && (
-              <div className="tool-event"><span className="tool-spinner" /><div><small>PI TOOL CALL</small><strong>{toolLabel}</strong></div></div>
-            )}
             <div ref={transcriptEndRef} />
           </div>
 
