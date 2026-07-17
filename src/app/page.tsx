@@ -252,7 +252,29 @@ function conversationMessages(messages: WorkspaceMessage[]): ChatMessage[] {
     role: message.role,
     text: message.text,
     createdAt: message.createdAt,
+    ...(message.media?.length ? { mediaIds: message.media.map((item) => item.id) } : {}),
   }));
+}
+
+// Rebuild renderable media artifacts from the persisted per-message media, so
+// generated images and videos survive a reload or a chat switch instead of
+// vanishing (they used to live only in ephemeral client state).
+function persistedArtifacts(messages: WorkspaceMessage[]): MediaArtifact[] {
+  const artifacts: MediaArtifact[] = [];
+  for (const message of messages) {
+    for (const media of message.media ?? []) {
+      if (!media.url) continue;
+      artifacts.push({
+        id: media.id,
+        kind: media.kind,
+        title: media.kind === "image" ? "Image" : media.kind === "video" ? "Video" : "Audio",
+        prompt: media.prompt ?? "",
+        status: "ready",
+        url: media.url,
+      });
+    }
+  }
+  return artifacts;
 }
 
 function isInternalMediaConfirmation(text: string): boolean {
@@ -896,7 +918,9 @@ function Workspace() {
         .filter((item) => item.conversationId === payload.conversation.id)
         .map(queuedChatMessage),
     ]);
-    setArtifacts([]);
+    // Rehydrate media from the persisted messages so images/videos generated
+    // earlier still render after a reload or chat switch.
+    setArtifacts(persistedArtifacts(payload.messages));
     setAction("neutral");
     setPresenceDirective(DEFAULT_PRESENCE);
     setVisual(undefined);
@@ -2333,6 +2357,16 @@ function Workspace() {
           } catch {
             // A single malformed NDJSON line should not abort the whole turn.
             continue;
+          }
+          if (event.type === "tool_end" && event.details?.kind && ["image", "video", "music"].includes(String(event.details.kind))) {
+            console.log("[MEDIA_DEBUG] stream tool_end", {
+              kind: event.details.kind,
+              status: event.details.status,
+              hasUrl: Boolean(event.details.url),
+              urlLength: event.details.url ? String(event.details.url).length : 0,
+              isError: event.isError,
+              detailsKeys: Object.keys(event.details ?? {}),
+            });
           }
           if (event.type === "text_delta" && event.delta) {
             if (!firstDeltaReceived) {

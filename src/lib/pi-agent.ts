@@ -7,7 +7,7 @@ import {
   type Skill,
 } from "@earendil-works/pi-agent-core";
 import { Type, type ImageContent } from "@earendil-works/pi-ai";
-import type { AgentProfile, AgentSettings, AvatarAction, MemoryKind, PresenceDirective, ReasoningEffort, WorkspaceMessage } from "./app-types";
+import type { AgentProfile, AgentSettings, AvatarAction, MemoryKind, PersistedMedia, PresenceDirective, ReasoningEffort, WorkspaceMessage } from "./app-types";
 import {
   DEFAULT_SETTINGS,
   REALTIME_MULTIMODAL_FALLBACK,
@@ -132,6 +132,8 @@ interface RuntimeContext {
   memoryScope: MemoryScope;
   /** Per-turn collector for the Lab trace bridge: tool outcomes + start time. */
   turnTrace?: { startedAt: number; toolCalls: { tool: string; ok: boolean; error?: string }[] };
+  /** Media produced this turn (asset-backed), persisted on the assistant message. */
+  producedMedia?: PersistedMedia[];
   /** Approved self-authored abilities to materialize for this session (never pending ones). */
   customToolDefs?: CustomToolDef[];
   /** The live toolset (names + labels) for this session's runtime capability registry. */
@@ -815,18 +817,38 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       const input = params as { prompt: string; title?: string; width?: number; height?: number };
       const prompt = input.prompt;
       const result = await generateImage(prompt, runtime.settings.imageModel, signal, { width: input.width, height: input.height });
-      // Remember it so the user can ask to animate "the image you just made".
+      // Remember the inline data URL so image-to-video (which needs a fetchable
+      // image, not a localhost asset path) can still animate "the image you just made".
       runtime.lastGeneratedImageUrl = result.dataUrl;
+      // Persist the image as a durable asset so it survives reloads and chat
+      // switches and serves via the (Range-capable) asset endpoint, instead of
+      // living only as an ephemeral data URL in client state. Falls back to the
+      // data URL if the save fails.
+      let url = result.dataUrl;
+      let assetId = result.id ?? crypto.randomUUID();
+      try {
+        const base64 = result.dataUrl.split(",")[1] ?? "";
+        if (base64) {
+          await mkdir(MEDIA_DIR, { recursive: true });
+          const filePath = nodePath.join(MEDIA_DIR, `image-${crypto.randomUUID()}.webp`);
+          await fsWriteFile(filePath, Buffer.from(base64, "base64"));
+          const asset = await registerAsset({ kind: "image", path: filePath, prompt, model: runtime.settings.imageModel, metadata: { contentType: "image/webp" } });
+          assetId = asset.id;
+          url = `/api/media/asset?id=${encodeURIComponent(asset.id)}`;
+        }
+      } catch {
+        // Keep the inline data URL; the image still renders this turn.
+      }
       return {
         content: [{ type: "text", text: "The image was generated and is visible in the chat." }],
         details: {
           kind: "image",
           status: "ready",
-          id: result.id ?? crypto.randomUUID(),
+          id: assetId,
           title: input.title ?? "Venice creation",
           prompt,
           model: runtime.settings.imageModel,
-          url: result.dataUrl,
+          url,
         },
       };
     },
@@ -1521,7 +1543,9 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
       const asset = await registerAsset({ kind: "audio", path: filePath, prompt: input.text.slice(0, 200), model: runtime.settings.ttsModel, metadata: { contentType: "audio/mpeg" } });
       return {
         content: [{ type: "text", text: `Narration audio is ready (asset ${asset.id}). Mux it into the video with compose_media.` }],
-        details: { kind: "audio", status: "ready", id: asset.id, title: input.title ?? "Narration", url: `/api/media/asset?id=${encodeURIComponent(asset.id)}` },
+        // kind "music" so the client renders it in the audio player (it only
+        // knows image/video/music); the underlying asset is registered as audio.
+        details: { kind: "music", status: "ready", id: asset.id, title: input.title ?? "Narration", url: `/api/media/asset?id=${encodeURIComponent(asset.id)}` },
       };
     },
   };
@@ -1755,6 +1779,21 @@ function createSession(input: {
       } else {
         void markFailureRecovered(event.toolName).catch(() => undefined);
       }
+      // Accumulate asset-backed media produced this turn so it can be persisted
+      // on the assistant message and rehydrated after a reload or chat switch
+      // (media used to live only in ephemeral client state and vanished).
+      const mediaDetails = result?.details as { kind?: string; id?: string; url?: string; status?: string; prompt?: string } | undefined;
+      if (!event.isError && mediaDetails && ["image", "video", "music"].includes(String(mediaDetails.kind)) && mediaDetails.id && mediaDetails.url) {
+        if (!runtime.producedMedia) runtime.producedMedia = [];
+        runtime.producedMedia = runtime.producedMedia.filter((item) => item.id !== mediaDetails.id);
+        runtime.producedMedia.push({
+          id: String(mediaDetails.id),
+          kind: mediaDetails.kind as PersistedMedia["kind"],
+          url: String(mediaDetails.url),
+          prompt: mediaDetails.prompt ? String(mediaDetails.prompt) : undefined,
+          status: mediaDetails.status ? String(mediaDetails.status) : undefined,
+        });
+      }
       if (event.toolName === "search_web" && !needsLiveWebResearch(runtime.currentMessage ?? "")) return;
       runtime.emit({
         type: "tool_end",
@@ -1853,6 +1892,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
   session.runtime.currentMessage = input.message;
   session.runtime.webSearchCompleted = false;
   session.runtime.turnTrace = { startedAt: Date.now(), toolCalls: [] };
+  session.runtime.producedMedia = [];
   // Supervisor-safe resume: on every real turn, re-drive any media jobs for this
   // conversation that were left queued/running (detached after a crash or a turn
   // that ended early), so a queued job can never orphan from runtime state.
@@ -2055,6 +2095,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
             role: "assistant",
             text: assistantText,
             createdAt: new Date().toISOString(),
+            ...(session.runtime.producedMedia?.length ? { media: session.runtime.producedMedia } : {}),
           });
         }
         if (!input.hidden) {
