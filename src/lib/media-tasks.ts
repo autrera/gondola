@@ -426,6 +426,7 @@ export interface MediaTaskStatusView {
   type: MediaTaskType;
   createdAt: string;
   updatedAt: string;
+  prompt?: string;
   assetId?: string;
   assetUrl?: string;
   error?: string;
@@ -439,9 +440,16 @@ export function toTaskStatusView(task: MediaTask): MediaTaskStatusView {
     type: task.type,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    ...(task.prompt ? { prompt: task.prompt.slice(0, 140) } : {}),
     ...(task.status === "succeeded" && task.assetId
       ? { assetId: task.assetId, assetUrl: `/api/media/asset?id=${encodeURIComponent(task.assetId)}` }
       : {}),
     ...(task.status === "failed" && task.error ? { error: task.error.slice(0, 300) } : {}),
   };
+}
+
+/** A conversation's media jobs (newest first), for the in-chat queue view. */
+export async function listConversationTasks(conversationId: string, limit = 12): Promise<MediaTask[]> {
+  const tasks = await listMediaTasks({ limit: 60 });
+  return tasks.filter((task) => task.conversationId === conversationId).slice(0, limit);
 }

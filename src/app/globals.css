@@ -4773,6 +4773,20 @@ input:focus-visible {
 .composer textarea::placeholder { color: var(--faint); }
 
 /* Live indicator for an active /goal inner loop, shown just above the composer. */
+.media-queue { width: calc(100% - 40px); max-width: 780px; margin: 0 auto 8px; padding: 8px 12px 10px; border: 1px solid rgba(255, 202, 112, .2); border-radius: 12px; background: rgba(255, 202, 112, .05); }
+.media-queue-title { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: #e6e8ec; font-size: 11px; font-weight: 640; letter-spacing: .01em; text-transform: uppercase; }
+.media-queue-count { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: rgba(255, 202, 112, .16); color: var(--amber); font-size: 10px; font-weight: 700; text-transform: none; }
+.media-queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.media-queue-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.media-queue-status { flex: 0 0 auto; width: 14px; display: flex; align-items: center; justify-content: center; }
+.media-queue-status .tool-spinner { width: 13px; height: 13px; border-width: 1px; }
+.media-queue-dot { width: 8px; height: 8px; border-radius: 50%; background: #7f858c; }
+.media-queue-item.is-failed .media-queue-dot { background: #d98a8a; }
+.media-queue-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.media-queue-label { color: #e6e8ec; font-size: 12px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-queue-meta { color: #8a9099; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-queue-item.is-failed .media-queue-meta { color: #d98a8a; }
+
 .goal-banner { display: flex; align-items: center; gap: 10px; width: calc(100% - 40px); max-width: 780px; margin: 0 auto 8px; padding: 9px 13px; border: 1px solid rgba(184, 207, 232, .22); border-radius: 12px; background: rgba(184, 207, 232, .06); }
 .goal-banner.goal-achieved { border-color: rgba(139, 191, 157, .32); background: rgba(139, 191, 157, .08); }
 .goal-banner.goal-waiting { border-color: rgba(236, 185, 102, .32); background: rgba(236, 185, 102, .07); }

@@ -57,6 +57,16 @@ import { removeEmDashes } from "@/lib/text-style";
 import { takeEarlySpeechSegment } from "@/lib/voice-latency";
 import { shouldPersistTask } from "@/lib/task-intent";
 
+// A durable media job (video/music) for the in-chat queue view.
+interface MediaJob {
+  taskId: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  type: "image" | "video" | "music" | "speech";
+  prompt?: string;
+  assetUrl?: string;
+  error?: string;
+}
+
 interface MessageAttachment {
   name: string;
   kind: "image" | "text";
@@ -837,6 +847,7 @@ function Workspace() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const [artifacts, setArtifacts] = useState<MediaArtifact[]>([]);
+  const [mediaQueue, setMediaQueue] = useState<MediaJob[]>([]);
   const [input, setInput] = useState("");
   const [goal, setGoal] = useState<GoalState | null>(null);
   const goalActiveRef = useRef(false);
@@ -951,6 +962,9 @@ function Workspace() {
   const lastAmbientFrameRef = useRef<string | undefined>(undefined);
   const captureCanvasRef = useRef<HTMLCanvasElement | undefined>(undefined);
   const mediaObjectUrlsRef = useRef<Set<string>>(new Set());
+  // Read-only mirror of artifacts so the media-queue poller can make dedupe
+  // decisions without re-subscribing (its callback is stable).
+  const artifactsRef = useRef<MediaArtifact[]>([]);
   const cameraGreetingInFlightRef = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -968,6 +982,104 @@ function Workspace() {
 
   const isBusy = !["idle", "error"].includes(phase);
   const generating = ["thinking", "tool", "speaking"].includes(phase);
+
+  useEffect(() => { artifactsRef.current = artifacts; }, [artifacts]);
+
+  // Durable media queue for the active conversation, so long-running video/music
+  // jobs stay visible in the chat and can never quietly detach from the agent
+  // that started them (they survive reloads and chat switches).
+  const refreshMediaQueue = useCallback(async (conversationId: string) => {
+    if (!conversationId) return;
+    try {
+      const response = await fetch(`/api/media/task?conversationId=${encodeURIComponent(conversationId)}`, { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { tasks?: MediaJob[] };
+      if (sessionIdRef.current !== conversationId) return; // switched away mid-flight
+      const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      setMediaQueue(tasks);
+
+      // Reconcile finished async jobs (video/music) back into the transcript.
+      // These are queued with no URL at tool time, so they are never persisted
+      // on the message and would otherwise vanish on reload / chat switch. The
+      // durable task store is the source of truth: on every poll we re-derive
+      // the delivered asset. Dedupe by taskId, shared with the live path.
+      const finished = tasks.filter(
+        (job) => job.status === "succeeded" && !!job.assetUrl && (job.type === "video" || job.type === "music"),
+      );
+      if (finished.length === 0) return;
+      const known = artifactsRef.current;
+      const fill: Array<{ taskId: string; url: string }> = [];
+      const inject: MediaArtifact[] = [];
+      for (const job of finished) {
+        const live = known.find((item) => item.taskId === job.taskId);
+        if (live) {
+          if (!live.url) fill.push({ taskId: job.taskId, url: job.assetUrl as string }); // live poll died mid-flight
+          continue;
+        }
+        const stableId = `media-task-${job.taskId}`;
+        if (known.some((item) => item.id === stableId)) continue;
+        inject.push({
+          id: stableId,
+          taskId: job.taskId,
+          kind: job.type as MediaArtifact["kind"],
+          title: job.type === "video" ? "Video" : "Audio",
+          prompt: job.prompt ?? "",
+          status: "ready",
+          url: job.assetUrl,
+        });
+      }
+      if (fill.length === 0 && inject.length === 0) return;
+      setArtifacts((current) => {
+        let next = current;
+        if (fill.length) {
+          const byTask = new Map(fill.map((entry) => [entry.taskId, entry.url]));
+          next = next.map((item) => item.taskId && byTask.has(item.taskId)
+            ? { ...item, status: "ready" as const, url: byTask.get(item.taskId) }
+            : item);
+        }
+        const fresh = inject.filter((artifact) => !next.some((item) => item.id === artifact.id));
+        return fresh.length ? [...fresh, ...next] : next;
+      });
+      if (inject.length) {
+        const injectedIds = inject.map((artifact) => artifact.id);
+        setMessages((current) => {
+          let lastAssistant = -1;
+          for (let i = current.length - 1; i >= 0; i -= 1) {
+            if (current[i].role === "assistant") { lastAssistant = i; break; }
+          }
+          if (lastAssistant < 0) return current;
+          const attached = new Set(current.flatMap((message) => message.mediaIds ?? []));
+          const add = injectedIds.filter((id) => !attached.has(id));
+          if (add.length === 0) return current;
+          return current.map((message, index) => index === lastAssistant
+            ? { ...message, mediaIds: [...new Set([...(message.mediaIds ?? []), ...add])] }
+            : message);
+        });
+      }
+    } catch {
+      /* transient; next poll retries */
+    }
+  }, []);
+
+  useEffect(() => {
+    setMediaQueue([]);
+    if (sessionId) void refreshMediaQueue(sessionId);
+  }, [sessionId, refreshMediaQueue]);
+
+  const queueHasActive = mediaQueue.some((job) => job.status === "queued" || job.status === "running");
+  useEffect(() => {
+    if (!sessionId) return;
+    // Poll fast while a job is in flight, and slowly otherwise so a job the agent
+    // just queued (or one delivered in the background) shows up on its own.
+    const interval = window.setInterval(() => void refreshMediaQueue(sessionId), queueHasActive ? 4000 : 20000);
+    return () => window.clearInterval(interval);
+  }, [sessionId, queueHasActive, refreshMediaQueue]);
+
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    if (wasBusyRef.current && !isBusy && sessionId) void refreshMediaQueue(sessionId);
+    wasBusyRef.current = isBusy;
+  }, [isBusy, sessionId, refreshMediaQueue]);
   const activeAgent = useMemo(() => workspaceSnapshot?.agents.find((agent) => agent.id === activeAgentId)
     ?? workspaceSnapshot?.agents[0], [activeAgentId, workspaceSnapshot?.agents]);
   const agentName = activeAgent?.name ?? "Entity";
@@ -2237,6 +2349,7 @@ function Workspace() {
         resolution: details.resolution ? String(details.resolution) : undefined,
         soundtrack: ["none", "natural", "music"].includes(String(details.soundtrack)) ? details.soundtrack as MediaArtifact["soundtrack"] : undefined,
         audioDirection: details.audioDirection ? String(details.audioDirection) : undefined,
+        taskId: details.taskId ? String(details.taskId) : undefined,
       };
       const confirmedArtifactId = artifact.status === "queued"
         ? pendingMediaConfirmationRef.current.get(artifact.kind)
@@ -4272,6 +4385,44 @@ function Workspace() {
               <button className="camera-permission-dismiss" onClick={() => setCameraPrompt(null)} aria-label="Dismiss camera request">×</button>
             </div>
           )}
+
+          {(() => {
+            const visibleQueue = mediaQueue.filter(
+              (job) => job.status === "queued" || job.status === "running" || job.status === "failed",
+            );
+            if (visibleQueue.length === 0) return null;
+            const typeLabel = (type: MediaJob["type"]) =>
+              type === "video" ? "Video" : type === "music" ? "Music" : type === "speech" ? "Narration" : "Image";
+            return (
+              <div className="media-queue" role="status" aria-live="polite">
+                <div className="media-queue-title">
+                  <span>{queueHasActive ? "Rendering media" : "Media jobs"}</span>
+                  <span className="media-queue-count">{visibleQueue.length}</span>
+                </div>
+                <ul className="media-queue-list">
+                  {visibleQueue.slice(0, 6).map((job) => (
+                    <li key={job.taskId} className={`media-queue-item is-${job.status}`}>
+                      <span className="media-queue-status" aria-hidden="true">
+                        {job.status === "queued" || job.status === "running"
+                          ? <span className="tool-spinner" />
+                          : <span className="media-queue-dot" />}
+                      </span>
+                      <div className="media-queue-info">
+                        <span className="media-queue-label">
+                          {typeLabel(job.type)}{job.prompt ? ` · ${job.prompt}` : ""}
+                        </span>
+                        <span className="media-queue-meta">
+                          {job.status === "queued" ? "Queued"
+                            : job.status === "running" ? "Rendering…"
+                            : job.error ?? "Failed"}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })()}
 
           {goal && (
             <div className={`goal-banner goal-${goal.status}`}>
