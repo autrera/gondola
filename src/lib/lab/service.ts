@@ -27,7 +27,7 @@ import {
   simulatedJudge,
   simulatedTaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, proposalSignature, reviewReliability, reviewTraces, type ProposalDraft, type ProposerFeedback } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, proposalSignature, reviewFlagged, reviewReliability, reviewTraces, type ProposalDraft, type ProposerFeedback } from "./reviewer";
 import { createLiveJudge, createLiveTaskRunner, makeLiveRunAgent } from "./runner";
 import type { ConfigVersion, EvaluationRecord, ImprovementProposal, RunTrace } from "./types";
 
@@ -113,10 +113,13 @@ export async function generateProposal(hint?: string): Promise<ImprovementPropos
     `Preserving: ${PRESERVED_BEHAVIORS.join("; ")}.`,
   ].filter(Boolean).join(" ");
 
-  // Creative-quality review over reviewer-visible cases, then reliability review
-  // over the live failure traces the supervisor tagged. Skip empty or duplicate
-  // candidates and fall through to the next reviewer.
+  // Reviewers, tried in order; a duplicate or no-op falls through to the next.
+  // When the agent flagged a specific problem, honor that signal first so its
+  // own diagnosis actually drives a proposal instead of being discarded. Then
+  // creative-quality review, then reliability review over tagged failures.
+  const flaggedReason = hint?.trim();
   const reviewers: Array<() => ProposalDraft | null> = [
+    ...(flaggedReason ? [() => reviewFlagged(flaggedReason, allTraces, champion.config, feedback)] : []),
     () => reviewTraces(visibleTraces, champion.config, feedback),
     () => reviewReliability(allTraces, champion.config, feedback),
   ];

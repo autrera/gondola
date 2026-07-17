@@ -12,7 +12,8 @@ import {
   runEvaluation,
   type TaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory, proposalSignature, reviewReliability } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, proposalSignature, reviewFlagged, reviewReliability } from "./reviewer";
+import { policyDirectives } from "./policy";
 import {
   createChallenger,
   getChampion,
@@ -134,6 +135,32 @@ test("generateProposal falls through to reliability when the creative proposal i
   const next = await generateProposal();
   assert.ok(next, "the reliability proposal is generated even though the creative one is a duplicate");
   assert.equal(next?.configPatch.latencyMode, "fast");
+});
+
+test("reviewFlagged turns an agent-flagged media-format problem into a bounded proposal", () => {
+  const champion = naiveChampionConfig();
+  const draft = reviewFlagged("The Instagram Reel came out landscape, not vertical 9:16. Fix this for future turns.", [], champion);
+  assert.ok(draft, "a media-format flag should yield a proposal");
+  assert.equal(draft?.category, "workflow_policy");
+  assert.equal(draft?.configPatch.confirmMediaFormat, true);
+  // A generic, non-format flag does not fabricate a proposal.
+  assert.equal(reviewFlagged("the jokes are not funny enough", [], champion), null);
+  // Once the champion already confirms media format, it will not re-propose.
+  assert.equal(reviewFlagged("wrong aspect ratio again", [], applyWorkflowPatch(champion, { confirmMediaFormat: true })), null);
+});
+
+test("policyDirectives injects a format-confirmation directive when confirmMediaFormat is on", () => {
+  const directives = policyDirectives({ ...naiveChampionConfig().workflowPolicy, confirmMediaFormat: true });
+  assert.ok(directives.some((directive) => /aspect ratio|format/i.test(directive) && /9:16/.test(directive)));
+});
+
+test("a flagged media-format problem produces a proposal even when heuristics find nothing", async () => {
+  await seedDemo();
+  // Consume the creative proposal the heuristics would otherwise return.
+  await generateProposal();
+  const flagged = await generateProposal("Reels keep exporting as 16:9 landscape instead of vertical 9:16");
+  assert.ok(flagged, "the agent's flag should drive a proposal");
+  assert.equal(flagged?.configPatch.confirmMediaFormat, true);
 });
 
 test("reviewReliability proposes fast latency mode after repeated timeouts", () => {

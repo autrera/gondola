@@ -23,6 +23,9 @@ export function policyDirectives(policy: WorkflowPolicy): string[] {
   if (policy.latencyMode === "fast") {
     directives.push("Prioritize speed: keep answers tight, minimize deliberation and long reasoning, and avoid unnecessary tool calls.");
   }
+  if (policy.confirmMediaFormat) {
+    directives.push("Before generating any image or video, set the target aspect ratio/format from where it will be used (Instagram, Reels, Stories, TikTok, Shorts = vertical 9:16; banners and covers = wide or 16:9) and confirm it matches the request. Never default to square or 16:9 for a destination that needs another shape.");
+  }
   return directives;
 }
 

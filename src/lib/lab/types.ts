@@ -116,6 +116,12 @@ export interface WorkflowPolicy {
    * "balanced" is the default. Optional so older configs remain valid.
    */
   latencyMode?: "fast" | "balanced";
+  /**
+   * Media-format guard. When true, the agent must set and confirm the target
+   * aspect ratio/format from the destination before generating media, instead
+   * of defaulting and being corrected. Optional so older configs stay valid.
+   */
+  confirmMediaFormat?: boolean;
 }
 
 export interface RoutingRule {

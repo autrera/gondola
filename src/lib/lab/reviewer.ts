@@ -123,6 +123,39 @@ export function reviewTraces(traces: RunTrace[], champion: LabConfig, feedback?:
   };
 }
 
+const MEDIA_FORMAT_HINT = /aspect|ratio|portrait|vertical|landscape|widescreen|\breel|stor(y|ies)|tiktok|shorts|9:16|16:9|1:1|4:1|banner|dimension|resolution|\bformat|orientation/i;
+
+/**
+ * A proposal driven by the acting agent's own flag (propose_harness_change).
+ * The deterministic heuristics below only recognize a fixed set of patterns, so
+ * a novel failure the agent can name would otherwise be discarded. This turns a
+ * flagged, recurring media-format problem into a bounded, testable behavioral
+ * change the Lab is allowed to own (a workflow directive) - it never patches
+ * code, and it still goes through evaluation and approval.
+ */
+export function reviewFlagged(hint: string, traces: RunTrace[], champion: LabConfig, feedback?: ProposerFeedback): ProposalDraft | null {
+  const reason = hint.trim();
+  if (!reason) return null;
+  if (MEDIA_FORMAT_HINT.test(reason) && !champion.workflowPolicy.confirmMediaFormat) {
+    const patch: Partial<WorkflowPolicy> = { confirmMediaFormat: true };
+    if (feedback?.avoidSignatures.includes(proposalSignature("workflow_policy", patch))) return null;
+    const evidence = traces.slice(0, 5).map((trace) => trace.runId);
+    return {
+      sourceRunIds: evidence,
+      observedProblem: `Media was generated in the wrong format for its destination, flagged by the agent: "${reason.slice(0, 160)}".`,
+      traceEvidence: evidence,
+      hypothesis: "Requiring the agent to set and confirm the target aspect ratio/format from the destination before generating media will stop wrong-format deliverables and the re-work they cause.",
+      category: "workflow_policy",
+      configPatch: patch,
+      targetMetric: "human_intervention",
+      expectedTradeoffs: "One brief format-confirmation step before media generation.",
+      riskLevel: "low",
+      evaluationPlan: "Champion vs challenger across the standard cases; require fewer human interventions with no quality regression beyond tolerance.",
+    };
+  }
+  return null;
+}
+
 /**
  * Reliability review over live failure traces (the ones the supervisor tagged
  * with a failureCategory). When the same category recurs, propose a bounded fix
