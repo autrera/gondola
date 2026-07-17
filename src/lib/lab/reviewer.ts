@@ -123,37 +123,54 @@ export function reviewTraces(traces: RunTrace[], champion: LabConfig, feedback?:
   };
 }
 
-const MEDIA_FORMAT_HINT = /aspect|ratio|portrait|vertical|landscape|widescreen|\breel|stor(y|ies)|tiktok|shorts|9:16|16:9|1:1|4:1|banner|dimension|resolution|\bformat|orientation/i;
+// The workflow-policy fields a reviewer (heuristic or model) may write. This is
+// the bounded surface: budgetUsd is deliberately excluded (budget enforcement is
+// off-limits), and any key outside this set is dropped. Keeping this here (pure)
+// means the model reviewer's output is validated against one whitelist, not
+// trusted blindly.
+export const WRITABLE_POLICY_FIELDS = [
+  "conceptCount",
+  "useSeparateCritic",
+  "requireAnalyzeBeforeAnimate",
+  "reviseBelowQuality",
+  "maxRevisions",
+  "latencyMode",
+  "confirmMediaFormat",
+] as const;
 
-/**
- * A proposal driven by the acting agent's own flag (propose_harness_change).
- * The deterministic heuristics below only recognize a fixed set of patterns, so
- * a novel failure the agent can name would otherwise be discarded. This turns a
- * flagged, recurring media-format problem into a bounded, testable behavioral
- * change the Lab is allowed to own (a workflow directive) - it never patches
- * code, and it still goes through evaluation and approval.
- */
-export function reviewFlagged(hint: string, traces: RunTrace[], champion: LabConfig, feedback?: ProposerFeedback): ProposalDraft | null {
-  const reason = hint.trim();
-  if (!reason) return null;
-  if (MEDIA_FORMAT_HINT.test(reason) && !champion.workflowPolicy.confirmMediaFormat) {
-    const patch: Partial<WorkflowPolicy> = { confirmMediaFormat: true };
-    if (feedback?.avoidSignatures.includes(proposalSignature("workflow_policy", patch))) return null;
-    const evidence = traces.slice(0, 5).map((trace) => trace.runId);
-    return {
-      sourceRunIds: evidence,
-      observedProblem: `Media was generated in the wrong format for its destination, flagged by the agent: "${reason.slice(0, 160)}".`,
-      traceEvidence: evidence,
-      hypothesis: "Requiring the agent to set and confirm the target aspect ratio/format from the destination before generating media will stop wrong-format deliverables and the re-work they cause.",
-      category: "workflow_policy",
-      configPatch: patch,
-      targetMetric: "human_intervention",
-      expectedTradeoffs: "One brief format-confirmation step before media generation.",
-      riskLevel: "low",
-      evaluationPlan: "Champion vs challenger across the standard cases; require fewer human interventions with no quality regression beyond tolerance.",
-    };
+/** Coerce an untrusted object into a valid Partial<WorkflowPolicy>, dropping
+ * unknown keys and out-of-range values. Pure, so it is unit-testable and shared
+ * by the model reviewer. */
+export function sanitizeWorkflowPatch(raw: unknown): Partial<WorkflowPolicy> {
+  if (!raw || typeof raw !== "object") return {};
+  const input = raw as Record<string, unknown>;
+  const patch: Partial<WorkflowPolicy> = {};
+  if (typeof input.conceptCount === "number" && Number.isFinite(input.conceptCount)) {
+    patch.conceptCount = Math.max(1, Math.min(8, Math.round(input.conceptCount)));
   }
-  return null;
+  if (typeof input.useSeparateCritic === "boolean") patch.useSeparateCritic = input.useSeparateCritic;
+  if (typeof input.requireAnalyzeBeforeAnimate === "boolean") patch.requireAnalyzeBeforeAnimate = input.requireAnalyzeBeforeAnimate;
+  if (input.reviseBelowQuality === null) patch.reviseBelowQuality = null;
+  else if (typeof input.reviseBelowQuality === "number" && Number.isFinite(input.reviseBelowQuality)) {
+    patch.reviseBelowQuality = Math.max(0, Math.min(10, input.reviseBelowQuality));
+  }
+  if (typeof input.maxRevisions === "number" && Number.isFinite(input.maxRevisions)) {
+    patch.maxRevisions = Math.max(0, Math.min(5, Math.round(input.maxRevisions)));
+  }
+  if (input.latencyMode === "fast" || input.latencyMode === "balanced") patch.latencyMode = input.latencyMode;
+  if (typeof input.confirmMediaFormat === "boolean") patch.confirmMediaFormat = input.confirmMediaFormat;
+  return patch;
+}
+
+/** Keep only the keys that actually differ from the champion (drop no-ops). */
+export function effectivePatch(patch: Partial<WorkflowPolicy>, champion: LabConfig): Partial<WorkflowPolicy> {
+  const out: Partial<WorkflowPolicy> = {};
+  for (const key of Object.keys(patch) as (keyof WorkflowPolicy)[]) {
+    if (patch[key] !== champion.workflowPolicy[key]) {
+      (out as Record<string, unknown>)[key] = patch[key];
+    }
+  }
+  return out;
 }
 
 /**

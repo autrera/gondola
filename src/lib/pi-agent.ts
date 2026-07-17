@@ -668,7 +668,7 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
     executionMode: "sequential",
     async execute(_toolCallId, params) {
       const input = params as { reason: string };
-      const proposal = await generateProposal(input.reason).catch(() => null);
+      const proposal = await generateProposal(input.reason, { modelReview: true }).catch(() => null);
       if (!proposal) {
         return {
           content: [{ type: "text", text: "I flagged this to Gondola Lab, but it did not find a new, bounded change to propose from recent traces right now." }],
@@ -2094,7 +2094,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<void> {
     // Async Lab review after recovery: if a failure pattern is emerging, let the
     // outer loop draft a bounded proposal in the background. Best-effort; it never
     // blocks the turn and never promotes — proposals still require human approval.
-    void generateProposal(`Automatic review after a ${recovery.category} failure the supervisor handled.`).catch(() => undefined);
+    void generateProposal(`Automatic review after a ${recovery.category} failure the supervisor handled.`, { modelReview: false }).catch(() => undefined);
     if (recovery.text) {
       await appendSessionRecord({
         sessionId: input.sessionId,

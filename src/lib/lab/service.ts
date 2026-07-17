@@ -27,7 +27,8 @@ import {
   simulatedJudge,
   simulatedTaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, proposalSignature, reviewFlagged, reviewReliability, reviewTraces, type ProposalDraft, type ProposerFeedback } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, diffWorkflowPolicy, proposalSignature, reviewReliability, reviewTraces, type ProposalDraft, type ProposerFeedback } from "./reviewer";
+import { reviewFlaggedWithModel, type ReviewerCompletion } from "./reviewer-model";
 import { createLiveJudge, createLiveTaskRunner, makeLiveRunAgent } from "./runner";
 import type { ConfigVersion, EvaluationRecord, ImprovementProposal, RunTrace } from "./types";
 
@@ -89,7 +90,16 @@ function sameConfigPatch(a: ImprovementProposal["configPatch"], b: ImprovementPr
  * reliability reviewer would never propose the timeout fix. `hint` carries an
  * optional agent-stated reason (from propose_harness_change) onto the proposal.
  */
-export async function generateProposal(hint?: string): Promise<ImprovementProposal | null> {
+export interface GenerateProposalOptions {
+  /** Run the model-based reviewer for an explicit agent flag. Defaults to true
+   * when a hint is present; the automatic post-recovery path passes false so it
+   * relies on the deterministic reviewers (and spends no inference). */
+  modelReview?: boolean;
+  /** Injectable reviewer completion for tests. */
+  reviewerComplete?: ReviewerCompletion;
+}
+
+export async function generateProposal(hint?: string, options?: GenerateProposalOptions): Promise<ImprovementProposal | null> {
   const champion = await ensureChampion();
   const allTraces = await listTraces();
   const visibleTasks = new Set(reviewerVisibleCases().map((testCase) => testCase.task));
@@ -114,18 +124,20 @@ export async function generateProposal(hint?: string): Promise<ImprovementPropos
   ].filter(Boolean).join(" ");
 
   // Reviewers, tried in order; a duplicate or no-op falls through to the next.
-  // When the agent flagged a specific problem, honor that signal first so its
-  // own diagnosis actually drives a proposal instead of being discarded. Then
-  // creative-quality review, then reliability review over tagged failures.
+  // When the agent flagged a specific problem, a model reviewer interprets that
+  // flag first (bounded + validated), so the agent's own diagnosis drives a
+  // proposal instead of being discarded. Then creative-quality review, then
+  // reliability review over tagged failures.
   const flaggedReason = hint?.trim();
-  const reviewers: Array<() => ProposalDraft | null> = [
-    ...(flaggedReason ? [() => reviewFlagged(flaggedReason, allTraces, champion.config, feedback)] : []),
+  const useModel = flaggedReason && (options?.modelReview ?? true);
+  const reviewers: Array<() => ProposalDraft | null | Promise<ProposalDraft | null>> = [
+    ...(useModel ? [() => reviewFlaggedWithModel({ reason: flaggedReason!, traces: allTraces, champion: champion.config, feedback, complete: options?.reviewerComplete })] : []),
     () => reviewTraces(visibleTraces, champion.config, feedback),
     () => reviewReliability(allTraces, champion.config, feedback),
   ];
   let draft: ProposalDraft | null = null;
   for (const review of reviewers) {
-    const candidate = review();
+    const candidate = await review();
     if (candidate && !isDuplicate(candidate)) { draft = candidate; break; }
   }
   if (!draft) return null;
