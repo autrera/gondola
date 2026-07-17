@@ -994,6 +994,35 @@ export async function generateImage(
   };
 }
 
+// Synthesize spoken narration and return the raw audio bytes (mp3), so a caller
+// can save it as a durable asset and mux it into a video. Bounded by a timeout.
+export async function synthesizeSpeech(
+  input: { text: string; model?: string; voice?: string; language?: string },
+  signal?: AbortSignal,
+): Promise<{ bytes: Buffer; contentType: string }> {
+  const model = input.model?.trim() || "tts-xai-v1";
+  const supportsExpressive = model.startsWith("tts-qwen3");
+  const response = await veniceFetch(
+    "/audio/speech",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        voice: input.voice?.trim() || (supportsExpressive ? "Dylan" : "rex"),
+        input: input.text.slice(0, 4096),
+        response_format: "mp3",
+        speed: 1,
+        language: input.language?.trim() || (supportsExpressive ? "English" : "en"),
+        streaming: false,
+      }),
+    },
+    { retries: 0, signal: withTimeout(signal, 30_000) },
+  );
+  const bytes = Buffer.from(await response.arrayBuffer());
+  return { bytes, contentType: response.headers.get("content-type") ?? "audio/mpeg" };
+}
+
 function isImageUrl(value?: string): value is string {
   return typeof value === "string" && (/^data:image\//i.test(value) || /^https?:\/\//i.test(value));
 }

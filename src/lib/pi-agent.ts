@@ -46,17 +46,24 @@ import {
   quoteAndQueueMusic,
   quoteAndQueueVideo,
   searchWeb,
+  synthesizeSpeech,
 } from "./venice";
 import {
   awaitMediaTask,
   createMediaTask,
   getMediaTask,
   getMediaTaskByProviderId,
+  isPathWithinMediaDir,
   listMediaTasks,
+  MEDIA_DIR,
   resumePendingMediaTasks,
   selectResumableTasks,
   toTaskStatusView,
 } from "./media-tasks";
+import { getAsset, registerAsset } from "./assets";
+import { composeVideo, mediaToolingAvailable, probeMedia, type Orientation } from "./media-ffmpeg";
+import { mkdir, writeFile as fsWriteFile } from "node:fs/promises";
+import nodePath from "node:path";
 import { buildRuntimeSnapshot } from "./runtime-snapshot";
 import {
   renderRuntimeExplain,
@@ -179,7 +186,7 @@ globalSessions.__veniceAlienSessions = sessions;
 // (sessions live on globalThis and survive hot-reloads). Add self-capability and
 // discovery tools here when you introduce them, or they won't appear until a
 // full restart.
-const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change", "venice_api", "venice_reference", "media_task_list", "media_task_await", "runtime_status", "runtime_explain", "set_plan", "update_step", "checkpoint"];
+const REQUIRED_BUILT_IN_TOOLS = ["search_web", "inspect_camera", "memory", "search_memory", "rewrite_self", "set_model", "list_models", "propose_harness_change", "venice_api", "venice_reference", "media_task_list", "media_task_await", "generate_narration", "compose_media", "verify_media", "runtime_status", "runtime_explain", "set_plan", "update_step", "checkpoint"];
 
 // Names a self-authored ability may never shadow (built-ins + coordination +
 // the self-extension tools themselves).
@@ -272,6 +279,8 @@ You have an animated alien body and Venice-powered tools:
 - When the user requests an image, call generate_image. Reason about the right shape from where it will be used and set width/height (pixels, up to 1280 per side) to match - there is no fixed menu, you choose the exact dimensions: vertical for phones, Reels, Stories, or TikTok (e.g. 720x1280); wide for banners or covers (e.g. 1280x320 or 1280x720); square otherwise. Pick the shape on the first generation rather than defaulting to square and waiting to be corrected. The result renders inline; never claim you can only make squares, cannot set dimensions, or that an image can only be delivered as a file.
 - When the user requests a video, first establish a compact creative brief in one natural question: desired length, standard or high quality, and whether it should have no audio, natural sound, or music (including the music mood). Also infer aspect_ratio from the destination (vertical "9:16" for Reels/Stories/TikTok, otherwise "16:9" or whatever fits) and confirm it in the brief rather than defaulting silently. Do not call generate_video until those choices are known or the user explicitly accepts your suggested defaults. Then call generate_video. The tool quotes first and queues automatically below the configured limit. If it returns quoted, state the exact price once and ask for confirmation. Set confirmed=true only after the user explicitly confirms that price and preserve the same brief on the confirmed call.
 - When the user requests music or a soundscape, use generate_music with the same confirmation rule.
+- To make a finished video with narration: write the narration, turn it into audio with generate_narration, then combine the video with that narration (and any music) into one deliverable with compose_media. compose_media returns a single finished video asset.
+- Before you call any produced video final, verify it with verify_media (it uses ffprobe, not a guess): confirm it opens, its orientation matches the destination (portrait 9:16 for Reels), it has audio when it should, and the duration is right. Report what you verified. If verify_media or compose_media reports the tooling is unavailable, say ffmpeg needs installing rather than pretending you checked.
 - Video and music are asynchronous: generate_video and generate_music return a queued job, not a finished file. In a normal chat turn the interface auto-delivers a video you queued. For anything else - a job you queued through the raw API, one a worker queued, or when the user asks you to fetch, re-check, or "show" a video - call media_task_list to read the true status and media_task_await (with the taskId, or queueId+model+kind) to wait for it and deliver the finished file into the chat. Always create media through generate_video/generate_music rather than the raw venice_api so the job is tracked and deliverable. If a generation call fails (for example an image-to-video 400), recover by retrying through generate_video itself (for instance with source_image none for text-to-video); do not switch to the raw venice_api to make or fetch media. Never download media with curl or save it to disk in order to show it - inline rendering happens automatically through generate_video and media_task_await. Never say a video is ready, delivered, or retrieved unless media_task_list shows it succeeded or media_task_await returned it; if it is still rendering, say exactly that.
 - Queued video and music jobs render asynchronously: the finished media is delivered into the chat automatically when it is ready, and you can also check status or fetch the result yourself with venice_api (for example GET /video/retrieve or /audio/retrieve with the job/request id from the queue response). If a job seems stuck or you need the file to organize or verify it, retrieve it; never tell the user you cannot check or retrieve a queued job.
 - You can delegate to subagents: call delegate_task to hand a focused sub-task to a scoped worker (live research and constructive file work), and call it several times to run workers in parallel. Reach for this when a request splits into independent parts, for example analyzing several papers, files, or topics at once; then synthesize the workers' returned results yourself. Never tell the user you cannot spawn, launch, or delegate to subagents, because you can.
@@ -1455,10 +1464,107 @@ function createTools(runtime: RuntimeContext): AgentTool[] {
     },
   };
 
+  // Resolve an asset id or a media file path to an on-disk path inside the
+  // managed media folder (the only place the asset endpoint will serve from).
+  const resolveMediaPath = async (assetOrPath: string): Promise<string | null> => {
+    const asset = await getAsset(assetOrPath).catch(() => undefined);
+    const candidate = asset?.path ?? (nodePath.isAbsolute(assetOrPath) ? assetOrPath : nodePath.join(MEDIA_DIR, assetOrPath));
+    return isPathWithinMediaDir(candidate) ? candidate : null;
+  };
+
+  const verifyMediaTool: AgentTool = {
+    name: "verify_media",
+    label: "Verify media",
+    description: "Deterministically inspect a produced media file (by assetId) using ffprobe, instead of guessing. Returns whether it opens, its width/height and orientation, duration, and whether it has an audio track - and checks them against optional expectations (expectOrientation, expectAudio, minDurationSec). Use this to verify a generated video before you call it done: is it vertical, does it have sound, is the duration right.",
+    parameters: Type.Object({
+      assetId: Type.String({ minLength: 1 }),
+      expectOrientation: Type.Optional(Type.Union([Type.Literal("portrait"), Type.Literal("landscape"), Type.Literal("square")])),
+      expectAudio: Type.Optional(Type.Boolean()),
+      minDurationSec: Type.Optional(Type.Number()),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { assetId: string; expectOrientation?: Orientation; expectAudio?: boolean; minDurationSec?: number };
+      if (!mediaToolingAvailable()) {
+        return { content: [{ type: "text", text: "Media verification is unavailable: ffprobe is not installed. Ask the owner to install ffmpeg (or the ffmpeg-static/ffprobe-static packages)." }], details: { kind: "verification", ok: false, available: false } };
+      }
+      const filePath = await resolveMediaPath(input.assetId);
+      if (!filePath) return { content: [{ type: "text", text: `No accessible media file for asset "${input.assetId}".` }], details: { kind: "verification", ok: false } };
+      const probe = await probeMedia(filePath);
+      const checks: { name: string; passed: boolean; detail: string }[] = [
+        { name: "opens", passed: probe.ok, detail: probe.ok ? "file opened and parsed" : (probe.error ?? "could not read the file") },
+      ];
+      if (input.expectOrientation) checks.push({ name: `orientation_is_${input.expectOrientation}`, passed: probe.orientation === input.expectOrientation, detail: `orientation is ${probe.orientation ?? "unknown"} (${probe.width ?? "?"}x${probe.height ?? "?"})` });
+      if (input.expectAudio !== undefined) checks.push({ name: input.expectAudio ? "has_audio" : "no_audio", passed: probe.hasAudio === input.expectAudio, detail: probe.hasAudio ? "an audio track is present" : "no audio track" });
+      if (input.minDurationSec !== undefined) checks.push({ name: "min_duration", passed: (probe.durationSec ?? 0) >= input.minDurationSec, detail: `duration ${probe.durationSec ?? 0}s vs required >= ${input.minDurationSec}s` });
+      const passed = checks.every((check) => check.passed);
+      const summary = `${passed ? "Verification passed" : "Verification found problems"}: ${probe.width ?? "?"}x${probe.height ?? "?"}${probe.orientation ? ` (${probe.orientation})` : ""}, ${probe.durationSec ?? "?"}s, audio ${probe.hasAudio ? "yes" : "no"}.`;
+      return { content: [{ type: "text", text: summary }], details: { kind: "verification", ok: passed, probe, checks } };
+    },
+  };
+
+  const generateNarrationTool: AgentTool = {
+    name: "generate_narration",
+    label: "Generate narration",
+    description: "Turn narration text into a spoken audio file (Venice text-to-speech) saved as an audio asset you can then mux into a video with compose_media. Pass the exact words to speak; optionally a voice. Returns an assetId.",
+    parameters: Type.Object({
+      text: Type.String({ minLength: 1, maxLength: 4000 }),
+      voice: Type.Optional(Type.String({ maxLength: 40 })),
+      title: Type.Optional(Type.String({ maxLength: 80 })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const input = params as { text: string; voice?: string; title?: string };
+      const { bytes } = await synthesizeSpeech({ text: input.text, voice: input.voice, model: runtime.settings.ttsModel }, signal);
+      await mkdir(MEDIA_DIR, { recursive: true });
+      const filePath = nodePath.join(MEDIA_DIR, `narration-${crypto.randomUUID()}.mp3`);
+      await fsWriteFile(filePath, bytes);
+      const asset = await registerAsset({ kind: "audio", path: filePath, prompt: input.text.slice(0, 200), model: runtime.settings.ttsModel, metadata: { contentType: "audio/mpeg" } });
+      return {
+        content: [{ type: "text", text: `Narration audio is ready (asset ${asset.id}). Mux it into the video with compose_media.` }],
+        details: { kind: "audio", status: "ready", id: asset.id, title: input.title ?? "Narration", url: `/api/media/asset?id=${encodeURIComponent(asset.id)}` },
+      };
+    },
+  };
+
+  const composeMediaTool: AgentTool = {
+    name: "compose_media",
+    label: "Compose media",
+    description: "Combine a video asset with one or more audio assets (narration and/or music) into a single finished video file, using ffmpeg. Pass the video's assetId and the audio assetIds to lay over it (mixed if more than one). Returns the assetId of the finished, deliverable video; verify it with verify_media, then deliver it.",
+    parameters: Type.Object({
+      videoAssetId: Type.String({ minLength: 1 }),
+      audioAssetIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 4 }),
+      title: Type.Optional(Type.String({ maxLength: 80 })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const input = params as { videoAssetId: string; audioAssetIds: string[]; title?: string };
+      if (!mediaToolingAvailable()) {
+        return { content: [{ type: "text", text: "Composition is unavailable: ffmpeg is not installed. Ask the owner to install ffmpeg (or the ffmpeg-static package)." }], details: { kind: "video", status: "error", available: false } };
+      }
+      const videoPath = await resolveMediaPath(input.videoAssetId);
+      if (!videoPath) return { content: [{ type: "text", text: `No accessible video file for asset "${input.videoAssetId}".` }], details: { kind: "video", status: "error" } };
+      const audioPaths: string[] = [];
+      for (const id of input.audioAssetIds) {
+        const audioPath = await resolveMediaPath(id);
+        if (!audioPath) return { content: [{ type: "text", text: `No accessible audio file for asset "${id}".` }], details: { kind: "video", status: "error" } };
+        audioPaths.push(audioPath);
+      }
+      await mkdir(MEDIA_DIR, { recursive: true });
+      const outputPath = nodePath.join(MEDIA_DIR, `composed-${crypto.randomUUID()}.mp4`);
+      const result = await composeVideo({ videoPath, audioPaths, outputPath });
+      if (!result.ok) return { content: [{ type: "text", text: `Composition failed: ${result.error ?? "unknown error"}.` }], details: { kind: "video", status: "error", message: result.error } };
+      const asset = await registerAsset({ kind: "video", path: outputPath, parentAssetIds: [input.videoAssetId, ...input.audioAssetIds], metadata: { contentType: "video/mp4" } });
+      return {
+        content: [{ type: "text", text: `Composed video is ready (asset ${asset.id}) with ${audioPaths.length} audio track(s). Verify it with verify_media, then deliver it.` }],
+        details: { kind: "video", status: "ready", id: asset.id, title: input.title ?? "Composed video", url: `/api/media/asset?id=${encodeURIComponent(asset.id)}` },
+      };
+    },
+  };
+
   const builtInTools = [
     animateAvatar, shapePresence, memoryTool, searchMemoryTool, rewriteSelf, setModel, listModels, proposeHarnessChange, sessionSearchTool,
     runtimeStatusTool, runtimeExplainTool, setPlanTool, updateStepTool, checkpointTool,
-    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, mediaTaskListTool, mediaTaskAwaitTool, veniceReferenceTool, veniceApiTool, delegateTool,
+    webSearchTool, inspectCamera, imageTool, videoTool, musicTool, generateNarrationTool, composeMediaTool, verifyMediaTool, mediaTaskListTool, mediaTaskAwaitTool, veniceReferenceTool, veniceApiTool, delegateTool,
     readFileTool, listDirectoryTool, createDirectoryTool, writeFileTool, editFileTool, movePathTool, deletePathTool, runCommandTool,
     createAbilityTool, testAbilityTool,
   ];
