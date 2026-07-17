@@ -12,7 +12,9 @@ import {
   runEvaluation,
   type TaskRunner,
 } from "./evaluation";
-import { applyWorkflowPatch, assertAllowedProposalCategory, proposalSignature, reviewReliability } from "./reviewer";
+import { applyWorkflowPatch, assertAllowedProposalCategory, proposalSignature, reviewReliability, sanitizeWorkflowPatch } from "./reviewer";
+import { reviewFlaggedWithModel } from "./reviewer-model";
+import { policyDirectives } from "./policy";
 import {
   createChallenger,
   getChampion,
@@ -134,6 +136,70 @@ test("generateProposal falls through to reliability when the creative proposal i
   const next = await generateProposal();
   assert.ok(next, "the reliability proposal is generated even though the creative one is a duplicate");
   assert.equal(next?.configPatch.latencyMode, "fast");
+});
+
+test("sanitizeWorkflowPatch keeps only whitelisted fields with valid values", () => {
+  const patch = sanitizeWorkflowPatch({
+    confirmMediaFormat: true,
+    conceptCount: 99,          // clamped to 8
+    maxRevisions: -3,          // clamped to 0
+    latencyMode: "warp",       // invalid -> dropped
+    permissions: "root",       // not a policy field -> dropped
+    budgetUsd: 999,            // deliberately not writable -> dropped
+  });
+  assert.equal(patch.confirmMediaFormat, true);
+  assert.equal(patch.conceptCount, 8);
+  assert.equal(patch.maxRevisions, 0);
+  assert.equal("latencyMode" in patch, false);
+  assert.equal("permissions" in (patch as Record<string, unknown>), false);
+  assert.equal("budgetUsd" in (patch as Record<string, unknown>), false);
+});
+
+test("reviewFlaggedWithModel validates the model's patch to the allowed surface", async () => {
+  const champion = naiveChampionConfig();
+  const complete = async () => JSON.stringify({
+    configPatch: { confirmMediaFormat: true, permissions: "root", budgetUsd: 999 },
+    observedProblem: "Media exported in the wrong shape.",
+    hypothesis: "Confirming the format first will stop wrong-shape deliverables.",
+    targetMetric: "human_intervention",
+    riskLevel: "low",
+  });
+  const draft = await reviewFlaggedWithModel({ reason: "reels keep coming out landscape", traces: [], champion, complete });
+  assert.ok(draft);
+  assert.equal(draft?.category, "workflow_policy");
+  assert.equal(draft?.configPatch.confirmMediaFormat, true);
+  assert.equal((draft?.configPatch as Record<string, unknown>).permissions, undefined);
+  assert.equal((draft?.configPatch as Record<string, unknown>).budgetUsd, undefined);
+});
+
+test("reviewFlaggedWithModel returns null on noChange, a no-op patch, or invalid JSON", async () => {
+  const champion = naiveChampionConfig();
+  assert.equal(await reviewFlaggedWithModel({ reason: "x", traces: [], champion, complete: async () => JSON.stringify({ noChange: true }) }), null);
+  // useSeparateCritic:false already matches the champion -> no-op -> null.
+  assert.equal(await reviewFlaggedWithModel({ reason: "x", traces: [], champion, complete: async () => JSON.stringify({ configPatch: { useSeparateCritic: false } }) }), null);
+  assert.equal(await reviewFlaggedWithModel({ reason: "x", traces: [], champion, complete: async () => "not json at all" }), null);
+});
+
+test("policyDirectives injects a format-confirmation directive when confirmMediaFormat is on", () => {
+  const directives = policyDirectives({ ...naiveChampionConfig().workflowPolicy, confirmMediaFormat: true });
+  assert.ok(directives.some((directive) => /aspect ratio|format/i.test(directive) && /9:16/.test(directive)));
+});
+
+test("an agent flag drives a proposal through the model reviewer even when heuristics find nothing", async () => {
+  await seedDemo();
+  // Consume the creative proposal the heuristics would otherwise return.
+  await generateProposal();
+  const flagged = await generateProposal("Reels keep exporting as 16:9 landscape instead of vertical 9:16", {
+    reviewerComplete: async () => JSON.stringify({
+      configPatch: { confirmMediaFormat: true },
+      observedProblem: "Reels exported landscape.",
+      hypothesis: "Confirming the target format first will fix it.",
+      targetMetric: "human_intervention",
+      riskLevel: "low",
+    }),
+  });
+  assert.ok(flagged, "the agent's flag should drive a proposal");
+  assert.equal(flagged?.configPatch.confirmMediaFormat, true);
 });
 
 test("reviewReliability proposes fast latency mode after repeated timeouts", () => {

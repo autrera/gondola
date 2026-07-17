@@ -936,18 +936,35 @@ export async function greetFromFrame(frameDataUrl: string, preferredModel?: stri
   throw lastError instanceof Error ? lastError : new Error("Venice vision is temporarily unavailable");
 }
 
+// Venice accepts explicit width/height. We only keep each side within Venice's
+// limits and snap to a multiple of 16 - there is deliberately no fixed menu of
+// shapes; the agent picks whatever pixels the task needs (e.g. 1280x320 for a
+// 4:1 banner, 720x1280 for a 9:16 reel). The chat renders the result inline at
+// its natural ratio.
+const IMAGE_SIDE_MIN = 256;
+const IMAGE_SIDE_MAX = 1280;
+
+function clampImageSide(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const snapped = Math.round(value / 16) * 16;
+  return Math.max(IMAGE_SIDE_MIN, Math.min(IMAGE_SIDE_MAX, snapped));
+}
+
 export async function generateImage(
   prompt: string,
   model: string,
   signal?: AbortSignal,
+  dimensions?: { width?: number; height?: number },
 ): Promise<{ dataUrl: string; id?: string }> {
+  const width = clampImageSide(dimensions?.width, 1024);
+  const height = clampImageSide(dimensions?.height, 1024);
   const response = await veniceJson<{ id?: string; images?: string[] }>(
     "/image/generate",
     {
       model,
       prompt,
-      width: 1024,
-      height: 1024,
+      width,
+      height,
       variants: 1,
       format: "webp",
       return_binary: false,
@@ -980,10 +997,13 @@ export async function quoteAndQueueVideo(
     imageUrl?: string;
     /** Multiple reference images for consistency (reference-to-video). */
     referenceImageUrls?: string[];
+    /** Frame shape for text-to-video, e.g. "16:9", "9:16", "1:1" - whatever the destination needs. */
+    aspectRatio?: string;
   },
   confirmed: boolean,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  const aspectRatio = options.aspectRatio?.trim() || "16:9";
   const referenceImages = (options.referenceImageUrls ?? []).filter(isImageUrl).slice(0, 9);
   const sourceImage = isImageUrl(options.imageUrl) ? options.imageUrl : referenceImages[0];
   const mode: "text" | "image" | "reference" = referenceImages.length > 1
@@ -1018,7 +1038,7 @@ export async function quoteAndQueueVideo(
         // Seedance image/reference variants derive the aspect ratio from the
         // source image and return a 400 if aspect_ratio is sent; only text-to-
         // video (no source image) accepts it.
-        ...(mode === "text" ? { aspect_ratio: "16:9" } : {}),
+        ...(mode === "text" ? { aspect_ratio: aspectRatio } : {}),
       }, signal);
       model = candidate;
       break;
@@ -1050,7 +1070,7 @@ export async function quoteAndQueueVideo(
       model,
       duration,
       resolution,
-      ...(mode === "text" ? { aspect_ratio: "16:9" } : {}),
+      ...(mode === "text" ? { aspect_ratio: aspectRatio } : {}),
       prompt: withAudio
         ? `${prompt}\n\nAudio direction: ${options.soundtrack === "music" ? options.audioDirection?.trim() || "cinematic instrumental music matching the scene" : "natural synchronized environmental sound, with no added score"}.`
         : prompt,
