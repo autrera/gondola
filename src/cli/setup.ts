@@ -194,7 +194,7 @@ export async function runSetupCommand(sub: string, flags: string[]): Promise<num
  * Ensure setup is ready before starting the harness.
  */
 export async function ensureSetupForRun(options: { interactive: boolean }): Promise<boolean> {
-  if (isSetupReady()) return true;
+  if (listProviders().some((p) => isSetupReady(p.id))) return true;
 
   if (!options.interactive) {
     const resolved = resolveCredential("surplus") ?? resolveCredential("venice");
