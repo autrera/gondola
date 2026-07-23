@@ -54,6 +54,9 @@ const child = spawn(process.execPath, args, {
   env: process.env,
 });
 
+process.on("SIGTERM", () => child.kill("SIGTERM"));
+process.on("SIGINT", () => child.kill("SIGINT"));
+
 child.on("exit", (code, signal) => {
   if (signal) {
     process.kill(process.pid, signal);
