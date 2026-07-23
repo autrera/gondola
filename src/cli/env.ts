@@ -32,3 +32,18 @@ export function loadEnv(cwd = process.cwd()): void {
     }
   }
 }
+
+export interface ServerConfig {
+  host: string;
+  port: string;
+}
+
+/**
+ * Resolves host and port configuration from environment variables or defaults.
+ */
+export function resolveServerConfig(env: Record<string, string | undefined> = process.env): ServerConfig {
+  const host = env.HOST?.trim() || env.HOSTNAME?.trim() || "localhost";
+  const port = env.PORT?.trim() || "3000";
+  return { host, port };
+}
+
