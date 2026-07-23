@@ -17,7 +17,15 @@ const HTTP_RECONNECT = {
 };
 
 function oauthBaseFallback(): string {
-  return (process.env.NOVA_PUBLIC_ORIGIN ?? "http://localhost:3000").replace(/\/$/, "");
+  if (process.env.NOVA_PUBLIC_ORIGIN) {
+    return process.env.NOVA_PUBLIC_ORIGIN.replace(/\/$/, "");
+  }
+  let host = process.env.HOST?.trim() || process.env.HOSTNAME?.trim() || "localhost";
+  if (host === "0.0.0.0" || host === "::") {
+    host = "localhost";
+  }
+  const port = process.env.PORT?.trim() || "3000";
+  return `http://${host}:${port}`;
 }
 
 function httpTransport(server: McpServerConfig, redirectBase: string): StreamableHTTPClientTransport {
