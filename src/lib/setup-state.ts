@@ -13,7 +13,6 @@ import {
   DEFAULT_PROVIDER_ID,
   deriveCapabilityRoutes,
   detectAvailableCapabilities,
-  listProviders,
   requireProvider,
 } from "./providers/registry";
 import { ProviderError } from "./providers/types";
@@ -22,9 +21,9 @@ import type { Capability, CapabilityRoute, ProviderErrorReason, ProviderModel } 
 // ...
 
 const CATALOG_FAILURE_MESSAGES: Record<ProviderErrorReason, string> = {
-  invalid_credential: "Venice rejected this key. Check that you copied the full key.",
+  invalid_credential: "The provider rejected this key. Check that you copied the correct API key.",
   no_credits: "This key has no available credits. Add credits, then verify again.",
-  unreachable: "Gondola couldn't reach Venice. Check your connection and try again.",
+  unreachable: "Gondola could not reach the provider. Check your connection and try again.",
   unknown: "The provider could not verify this key right now. Try again in a moment.",
 };
 
@@ -137,11 +136,7 @@ export function isSetupReady(providerId?: string): boolean {
   if (providerId) {
     return getSetupStatus(providerId).state === "ready";
   }
-  const record = readSetupRecord();
-  if (record?.providerId) {
-    return getSetupStatus(record.providerId).state === "ready";
-  }
-  return listProviders().some((p) => getSetupStatus(p.id).state === "ready");
+  return getSetupStatus(DEFAULT_PROVIDER_ID).state === "ready";
 }
 
 export interface VerifyOptions {

@@ -71,7 +71,7 @@ export function createVeniceStreamFn(timeoutMs = 120_000): StreamFn {
     let statusCode: number | undefined;
     const defaultRoute = resolveCapabilityRoute("chat");
     const providerId = (model.provider as string) || defaultRoute.providerId;
-    const apiKey = resolveCredential(providerId)?.apiKey ?? getVeniceKey(providerId);
+    const apiKey = getVeniceKey(providerId);
     const stream = streamOpenAICompatible(model as Model<"openai-completions">, context, {
       ...options,
       apiKey,

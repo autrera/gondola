@@ -177,7 +177,9 @@ export async function runSetupCommand(sub: string, flags: string[]): Promise<num
     return (await guidedSetup({ reset, providerId })) ? 0 : 1;
   }
   // Non-interactive setup: never prompt. Verify an existing credential or fail.
-  const resolved = resolveCredential(providerId ?? "surplus") ?? resolveCredential("venice");
+  const resolved = surplusFlag
+    ? resolveCredential("surplus") ?? resolveCredential("venice")
+    : resolveCredential("venice") ?? resolveCredential("surplus");
   if (!resolved) {
     console.error(theme.red("No provider credential configured."));
     console.error(theme.dim("Set SURPLUS_API_KEY or VENICE_API_KEY (see .env.example) or run `gondola setup` in an interactive terminal."));

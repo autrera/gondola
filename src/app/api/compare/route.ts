@@ -1,5 +1,5 @@
 import { resolveCredential } from "@/lib/credential-store";
-import { resolveCapabilityRoute } from "@/lib/providers/registry";
+import { requireProvider, resolveCapabilityRoute } from "@/lib/providers/registry";
 import { rejectUntrustedLocalRequest } from "@/lib/request-security";
 import { getVeniceKey, toPublicError } from "@/lib/venice";
 
@@ -38,7 +38,8 @@ export async function POST(request: Request) {
 
   const route = resolveCapabilityRoute("chat");
   const providerId = requestedProviderId ?? route.providerId;
-  const baseUrl = route.adapter.baseUrl;
+  const adapter = requireProvider(providerId);
+  const baseUrl = adapter.baseUrl;
   const key = resolveCredential(providerId)?.apiKey ?? getVeniceKey(providerId);
 
   const encoder = new TextEncoder();
@@ -74,13 +75,15 @@ export async function POST(request: Request) {
             messages,
             max_completion_tokens: MAX_COMPLETION_TOKENS,
             stream_options: { include_usage: true },
-            venice_parameters: {
-              enable_web_search: "off",
-              enable_web_scraping: false,
-              include_venice_system_prompt: false,
-              disable_thinking: true,
-              strip_thinking_response: true,
-            },
+            ...(providerId === "venice" ? {
+              venice_parameters: {
+                enable_web_search: "off",
+                enable_web_scraping: false,
+                include_venice_system_prompt: false,
+                disable_thinking: true,
+                strip_thinking_response: true,
+              },
+            } : {}),
           }),
           signal: upstream.signal,
           cache: "no-store",
