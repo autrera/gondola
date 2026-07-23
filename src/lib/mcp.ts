@@ -6,6 +6,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { McpToolSummary } from "./app-types";
 import type { McpServerConfig } from "./workspace";
+import { resolveServerConfig } from "@/cli/env";
 import { FileOAuthProvider } from "./mcp-oauth";
 import { redactToolArgs } from "./tool-activity";
 
@@ -20,12 +21,9 @@ function oauthBaseFallback(): string {
   if (process.env.NOVA_PUBLIC_ORIGIN) {
     return process.env.NOVA_PUBLIC_ORIGIN.replace(/\/$/, "");
   }
-  let host = process.env.HOST?.trim() || process.env.HOSTNAME?.trim() || "localhost";
-  if (host === "0.0.0.0" || host === "::") {
-    host = "localhost";
-  }
-  const port = process.env.PORT?.trim() || "3000";
-  return `http://${host}:${port}`;
+  const { host, port } = resolveServerConfig();
+  const callbackHost = host === "0.0.0.0" || host === "::" ? "localhost" : host;
+  return `http://${callbackHost}:${port}`;
 }
 
 function httpTransport(server: McpServerConfig, redirectBase: string): StreamableHTTPClientTransport {
