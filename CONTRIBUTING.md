@@ -32,6 +32,13 @@ Run the web companion:
 npm run dev
 ```
 
+Or with Docker:
+
+```bash
+docker build -t gondola .
+docker run -p 3000:3000 --env-file .env.local gondola
+```
+
 Run the terminal harness:
 
 ```bash
