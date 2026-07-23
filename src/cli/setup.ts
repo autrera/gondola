@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import { deleteStoredCredential, resolveCredential } from "../lib/credential-store";
+import { listProviders, requireProvider } from "../lib/providers/registry";
 import { ALL_CAPABILITIES } from "../lib/providers/types";
 import { clearSetupRecord, getSetupStatus, isSetupReady, verifySetup, type SetupStatus } from "../lib/setup-state";
 import { theme } from "./theme";
@@ -22,7 +23,6 @@ function promptLine(query: string): Promise<string> {
   return new Promise((resolve) => rl.question(query, (answer) => { rl.close(); resolve(answer.trim()); }));
 }
 
-// Reads a secret without echoing it to the terminal.
 function promptHidden(query: string): Promise<string> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
@@ -42,7 +42,8 @@ function printCredential(status: SetupStatus): void {
     console.log(`  Credential: ${theme.yellow("none configured")}`);
     return;
   }
-  const source = cred.source === "environment" ? "environment (VENICE_API_KEY)" : "local (~/.gondola/credentials.json)";
+  const envVar = status.provider.id === "surplus" ? "SURPLUS_API_KEY" : "VENICE_API_KEY";
+  const source = cred.source === "environment" ? `environment (${envVar})` : "local (~/.gondola/credentials.json)";
   console.log(`  Credential: ${theme.green(cred.maskedSuffix ?? "configured")} ${theme.dim(`from ${source}`)}`);
 }
 
@@ -59,7 +60,7 @@ function printCapabilities(status: SetupStatus): void {
 }
 
 function printStatusSummary(status: SetupStatus): void {
-  console.log(theme.bold(`Provider: ${status.provider.name} ${theme.dim(`(${status.provider.id}) · default capability layer`)}`));
+  console.log(theme.bold(`Provider: ${status.provider.name} ${theme.dim(`(${status.provider.id}) · capability layer`)}`));
   printCredential(status);
   console.log(`  State: ${status.state === "ready" ? theme.green(status.state) : theme.yellow(status.state)}`);
   if (status.verifiedAt) console.log(theme.dim(`  Verified: ${status.verifiedAt}`));
@@ -67,53 +68,65 @@ function printStatusSummary(status: SetupStatus): void {
 
 function printVerifyResult(status: SetupStatus): void {
   if (status.state === "ready") {
-    console.log(theme.green("✓ Venice verified — a live model check and a test message both succeeded."));
+    console.log(theme.green(`✓ ${status.provider.name} verified — a live model check and a test message both succeeded.`));
     printCapabilities(status);
   } else {
     console.error(theme.red(`✗ ${status.message ?? "Setup is not ready."}`));
   }
 }
 
-function explainVenice(): void {
-  console.log(theme.bold("\nConnect Venice to unlock the complete Gondola experience."));
-  console.log(theme.dim("One Venice API key gives Gondola models for reasoning, vision, search, speech,"));
-  console.log(theme.dim("transcription, images, video, music, and embeddings. Your key stays on this"));
-  console.log(theme.dim("machine (~/.gondola/credentials.json, owner-only). You can override roles later."));
-  console.log(theme.dim("Create or manage a key: https://venice.ai/settings/api\n"));
+function explainProvider(providerId: string): void {
+  const provider = requireProvider(providerId);
+  console.log(theme.bold(`\nConnect ${provider.name} to unlock Gondola capabilities.`));
+  console.log(theme.dim(`One ${provider.name} API key gives Gondola access to its model catalog.`));
+  console.log(theme.dim("Your key stays on this machine (~/.gondola/credentials.json, owner-only)."));
+  console.log(theme.dim(`Create or manage a key: ${provider.keyManagementUrl}\n`));
 }
 
 /**
- * Interactive guided setup. Detects and verifies an existing credential, or
- * prompts for one, and saves only after verification passes. Returns true when
- * setup is ready.
+ * Interactive guided setup supporting Venice AI and Surplus Intelligence.
  */
-async function guidedSetup(options: { reset?: boolean } = {}): Promise<boolean> {
+async function guidedSetup(options: { reset?: boolean; providerId?: string } = {}): Promise<boolean> {
+  let providerId = options.providerId ?? "venice";
+
   if (options.reset) {
-    const confirm = (await promptLine(theme.yellow("Reset removes the local Venice credential and verification. Continue? (y/N) "))).toLowerCase();
+    const confirm = (await promptLine(theme.yellow("Reset removes local credentials and verification. Continue? (y/N) "))).toLowerCase();
     if (confirm === "y" || confirm === "yes") {
       deleteStoredCredential("venice");
+      deleteStoredCredential("surplus");
       clearSetupRecord();
-      console.log(theme.dim("Local credential and verification cleared."));
+      console.log(theme.dim("Local credentials and verification cleared."));
     }
   }
 
-  const resolved = resolveCredential("venice");
+  if (!options.providerId) {
+    console.log(theme.bold("\nSelect Inference Provider:"));
+    console.log("  1) Venice AI (Privacy-first capability layer)");
+    console.log("  2) Surplus Intelligence (GLM 5.2, DeepSeek v4, Grok 4.5)");
+    const choice = await promptLine("Select [1]: ");
+    if (choice === "2" || choice.toLowerCase() === "surplus") {
+      providerId = "surplus";
+    }
+  }
+
+  const resolved = resolveCredential(providerId);
   if (resolved) {
-    const status = getSetupStatus();
-    console.log(theme.dim(`Found a Venice key (${status.credential.source}${status.credential.maskedSuffix ? `, ${status.credential.maskedSuffix}` : ""}). Verifying…`));
-    const verified = await verifySetup();
+    const status = getSetupStatus(providerId);
+    console.log(theme.dim(`Found a ${status.provider.name} key (${status.credential.source}${status.credential.maskedSuffix ? `, ${status.credential.maskedSuffix}` : ""}). Verifying…`));
+    const verified = await verifySetup({ providerId });
     if (verified.state === "ready") { printVerifyResult(verified); return true; }
     console.error(theme.red(`✗ ${verified.message ?? "The configured key did not verify."}`));
     console.log(theme.dim("You can enter a different key below.\n"));
   } else {
-    explainVenice();
+    explainProvider(providerId);
   }
 
+  const provider = requireProvider(providerId);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const key = await promptHidden(theme.cyan("Paste your Venice API key (hidden): "));
+    const key = await promptHidden(theme.cyan(`Paste your ${provider.name} API key (hidden): `));
     if (!key) { console.error(theme.dim("No key entered.")); continue; }
-    console.log(theme.dim("Verifying with Venice…"));
-    const verified = await verifySetup({ apiKey: key });
+    console.log(theme.dim(`Verifying with ${provider.name}…`));
+    const verified = await verifySetup({ providerId, apiKey: key });
     if (verified.state === "ready") { printVerifyResult(verified); return true; }
     console.error(theme.red(`✗ ${verified.message ?? "That key did not verify."}`));
   }
@@ -123,23 +136,30 @@ async function guidedSetup(options: { reset?: boolean } = {}): Promise<boolean> 
 
 async function runDoctor(): Promise<number> {
   console.log(theme.bold("Gondola doctor\n"));
-  printStatusSummary(getSetupStatus());
-  const resolved = resolveCredential("venice");
-  if (!resolved) {
-    console.error(theme.yellow("\nNo credential configured. Run `gondola setup`."));
-    return 1;
+  let overallSuccess = true;
+  for (const p of listProviders()) {
+    const status = getSetupStatus(p.id);
+    printStatusSummary(status);
+    const resolved = resolveCredential(p.id);
+    if (resolved) {
+      console.log(theme.dim(`Running live checks for ${p.name} (catalog + test completion)…`));
+      const verified = await verifySetup({ providerId: p.id });
+      printVerifyResult(verified);
+      if (verified.state !== "ready") overallSuccess = false;
+    } else {
+      console.log(theme.dim(`No credential configured for ${p.name}.\n`));
+    }
   }
-  console.log(theme.dim("\nRunning live checks (catalog + test completion)…"));
-  const verified = await verifySetup();
-  printVerifyResult(verified);
-  return verified.state === "ready" ? 0 : 1;
+  return overallSuccess ? 0 : 1;
 }
 
 function runProvider(): number {
-  const status = getSetupStatus();
-  printStatusSummary(status);
-  if (status.state === "ready") printCapabilities(status);
-  else console.log(theme.yellow("\nRun `gondola setup` to verify and enable capabilities."));
+  for (const p of listProviders()) {
+    const status = getSetupStatus(p.id);
+    printStatusSummary(status);
+    if (status.state === "ready") printCapabilities(status);
+    console.log("");
+  }
   return 0;
 }
 
@@ -150,36 +170,37 @@ export async function runSetupCommand(sub: string, flags: string[]): Promise<num
 
   // setup
   const reset = flags.includes("--reset");
+  const surplusFlag = flags.includes("--surplus");
+  const providerId = surplusFlag ? "surplus" : undefined;
+
   if (process.stdin.isTTY) {
-    return (await guidedSetup({ reset })) ? 0 : 1;
+    return (await guidedSetup({ reset, providerId })) ? 0 : 1;
   }
   // Non-interactive setup: never prompt. Verify an existing credential or fail.
-  const resolved = resolveCredential("venice");
+  const resolved = resolveCredential(providerId ?? "surplus") ?? resolveCredential("venice");
   if (!resolved) {
-    console.error(theme.red("No Venice credential configured."));
-    console.error(theme.dim("Set VENICE_API_KEY or run `gondola setup` in an interactive terminal."));
+    console.error(theme.red("No provider credential configured."));
+    console.error(theme.dim("Set SURPLUS_API_KEY or VENICE_API_KEY (see .env.example) or run `gondola setup` in an interactive terminal."));
     return 1;
   }
-  const verified = await verifySetup();
+  const verified = await verifySetup({ providerId: resolved.providerId });
   printVerifyResult(verified);
   return verified.state === "ready" ? 0 : 1;
 }
 
 /**
- * Ensure setup is ready before starting the harness. Interactive sessions get
- * the guided flow; non-interactive runs never prompt and fail with a clear,
- * actionable message.
+ * Ensure setup is ready before starting the harness.
  */
 export async function ensureSetupForRun(options: { interactive: boolean }): Promise<boolean> {
   if (isSetupReady()) return true;
 
   if (!options.interactive) {
-    const resolved = resolveCredential("venice");
+    const resolved = resolveCredential("surplus") ?? resolveCredential("venice");
     console.error(theme.red("Gondola is not set up yet."));
     if (!resolved) {
-      console.error(theme.dim("Set VENICE_API_KEY (see .env.example) or run `gondola setup` in an interactive terminal."));
+      console.error(theme.dim("Set SURPLUS_API_KEY or VENICE_API_KEY (see .env.example) or run `gondola setup` in an interactive terminal."));
     } else {
-      console.error(theme.dim("The configured Venice key is not verified. Run `gondola setup` or `gondola doctor`."));
+      console.error(theme.dim("The configured provider key is not verified. Run `gondola setup` or `gondola doctor`."));
     }
     return false;
   }

@@ -16,6 +16,7 @@ export async function POST(request: Request) {
   if (!parsed.ok) return parsed.response;
 
   const apiKey = typeof parsed.body.apiKey === "string" ? parsed.body.apiKey.trim() : "";
+  const providerId = typeof parsed.body.providerId === "string" ? parsed.body.providerId.trim() : "venice";
   const override = parsed.body.override === true;
   if (!apiKey) {
     return Response.json({ error: "An API key is required." }, { status: 400, headers: { "Cache-Control": "no-store" } });
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
   if (!rateLimit("setup:credentials")) return rateLimited();
 
   try {
-    const status = await verifySetup({ apiKey, override, signal: request.signal });
+    const status = await verifySetup({ providerId, apiKey, override, signal: request.signal });
     const httpStatus = status.state === "ready" ? 200 : 400;
     return Response.json(status, { status: httpStatus, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
@@ -37,6 +38,8 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const rejected = rejectUntrustedLocalRequest(request);
   if (rejected) return rejected;
-  deleteStoredCredential("venice");
-  return Response.json(getSetupStatus(), { headers: { "Cache-Control": "no-store" } });
+  const url = new URL(request.url);
+  const providerId = url.searchParams.get("providerId") || url.searchParams.get("provider") || "venice";
+  deleteStoredCredential(providerId);
+  return Response.json(getSetupStatus(providerId), { headers: { "Cache-Control": "no-store" } });
 }

@@ -132,7 +132,7 @@ export interface CapabilityRoute {
  * embedding a secret.
  */
 export interface ProviderConfiguration {
-  defaultProviderId: "venice";
+  defaultProviderId: string;
   providers: Record<string, {
     enabled: boolean;
     credentialRef?: string;

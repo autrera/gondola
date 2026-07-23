@@ -9,6 +9,7 @@ import { completeApiTrace, describeApiTraceError, describeVeniceRequest, startAp
 import { observeBillingBalance } from "./billing-balance-state";
 import { resolveCredential } from "./credential-store";
 import { resolveCapabilityRoute } from "./providers/registry";
+import type { Capability } from "./providers/types";
 
 function safeHostname(url: string): string {
   try {
@@ -376,22 +377,19 @@ export class VeniceError extends Error {
   }
 }
 
-export function getVeniceKey(): string {
-  // Single runtime chokepoint. Resolves env first (VENICE_API_KEY), then the
-  // local credential store (~/.gondola/credentials.json) so a key configured
-  // through onboarding powers the whole app without editing .env.local.
-  const resolved = resolveCredential("venice");
+export function getVeniceKey(providerId: string = "venice"): string {
+  // Single runtime chokepoint. Resolves env first, then the local credential store
+  // so a key configured through onboarding powers the whole app without editing .env.local.
+  const resolved = resolveCredential(providerId);
   if (!resolved) {
-    throw new VeniceError("VENICE_API_KEY is not configured", 500, null);
+    throw new VeniceError(`${providerId.toUpperCase()}_API_KEY is not configured`, 500, null);
   }
   return resolved.apiKey;
 }
 
-// Admin-scoped key for billing/usage endpoints (balance, usage analytics, key
-// management). Server-only; never sent to the client. Falls back to the
-// inference key so features still attempt to work if no admin key is set.
-export function getVeniceAdminKey(): string {
-  return process.env.VENICE_ADMIN_KEY?.trim() || getVeniceKey();
+// Admin-scoped key for billing/usage endpoints.
+export function getVeniceAdminKey(providerId: string = "venice"): string {
+  return process.env.VENICE_ADMIN_KEY?.trim() || getVeniceKey(providerId);
 }
 
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
@@ -419,15 +417,19 @@ async function errorFromResponse(response: Response): Promise<VeniceError> {
   const candidate = body as { error?: string | { message?: string }; message?: string } | null;
   const message = typeof candidate?.error === "string"
     ? candidate.error
-    : candidate?.error?.message ?? candidate?.message ?? `Venice request failed (${response.status})`;
+    : candidate?.error?.message ?? candidate?.message ?? `Request failed (${response.status})`;
   return new VeniceError(message, response.status, body, response.headers.get("x-request-id") ?? undefined);
 }
 
 export async function veniceFetch(
   path: string,
   init: RequestInit = {},
-  options: { retries?: number; signal?: AbortSignal; trace?: boolean; admin?: boolean } = {},
+  options: { retries?: number; signal?: AbortSignal; trace?: boolean; admin?: boolean; providerId?: string; capability?: Capability } = {},
 ): Promise<Response> {
+  const route = resolveCapabilityRoute(options.capability ?? "chat");
+  const providerId = options.providerId ?? route.providerId;
+  const baseUrl = route.adapter.baseUrl;
+  const apiKey = options.admin ? getVeniceAdminKey(providerId) : getVeniceKey(providerId);
   const method = (init.method ?? "GET").toUpperCase();
   // Only safe, idempotent requests retry automatically. Generation and queue
   // POST requests can have succeeded even when their response was lost.
@@ -438,8 +440,9 @@ export async function veniceFetch(
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${options.admin ? getVeniceAdminKey() : getVeniceKey()}`);
-      const response = await fetch(`${VENICE_BASE_URL}${path}`, {
+      headers.set("Authorization", `Bearer ${apiKey}`);
+      const formattedPath = path.startsWith("/") ? path : `/${path}`;
+      const response = await fetch(`${baseUrl}${formattedPath}`, {
         ...init,
         headers,
         cache: "no-store",
@@ -506,6 +509,7 @@ export async function veniceJson<T>(
   path: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
+  options: { providerId?: string; capability?: Capability } = {},
 ): Promise<T> {
   const response = await veniceFetch(
     path,
@@ -514,7 +518,7 @@ export async function veniceJson<T>(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     },
-    { signal },
+    { signal, ...options },
   );
   const result = await parseVeniceJson<T>(response);
   const traceId = responseTraceIds.get(response);

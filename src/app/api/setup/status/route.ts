@@ -9,5 +9,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const rejected = rejectUntrustedLocalRequest(request);
   if (rejected) return rejected;
-  return Response.json(getSetupStatus(), { headers: { "Cache-Control": "no-store" } });
+  const url = new URL(request.url);
+  const providerId = url.searchParams.get("providerId") || url.searchParams.get("provider") || undefined;
+  return Response.json(getSetupStatus(providerId), { headers: { "Cache-Control": "no-store" } });
 }

@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS } from "../app-types";
+import { surplusAdapter } from "./surplus-adapter";
 import { veniceAdapter } from "./venice-adapter";
 import {
   ALL_CAPABILITIES,
@@ -9,11 +10,10 @@ import {
   type ProviderModel,
 } from "./types";
 
-// The single source of provider adapters. V1 registers only Venice. Adding a
-// provider later means registering an adapter here + adding capability routes —
-// never sprinkling `if (providerId === ...)` across the app.
+// The single source of provider adapters.
 const ADAPTERS: Record<string, ProviderAdapter> = {
   [veniceAdapter.id]: veniceAdapter,
+  [surplusAdapter.id]: surplusAdapter,
 };
 
 export const DEFAULT_PROVIDER_ID = "venice" as const;
@@ -89,10 +89,18 @@ const PREFERRED_DEFAULTS: Partial<Record<Capability, string>> = {
   music: DEFAULT_SETTINGS.musicModel,
 };
 
-function pickModel(models: ProviderModel[], capability: Capability): ProviderModel | undefined {
+const SURPLUS_PREFERRED_DEFAULTS: Partial<Record<Capability, string>> = {
+  chat: "glm-5.2",
+  vision: "grok-4.5",
+  reasoning: "glm-5.2",
+};
+
+function pickModel(models: ProviderModel[], capability: Capability, providerId?: string): ProviderModel | undefined {
   const candidates = modelsForCapability(models, capability);
   if (!candidates.length) return undefined;
-  const preferredId = capability === "search" ? DEFAULT_SETTINGS.chatModel : PREFERRED_DEFAULTS[capability];
+  const preferredId = providerId === "surplus"
+    ? SURPLUS_PREFERRED_DEFAULTS[capability]
+    : (capability === "search" ? DEFAULT_SETTINGS.chatModel : PREFERRED_DEFAULTS[capability]);
   if (preferredId) {
     const preferred = candidates.find((model) => model.id === preferredId);
     if (preferred) return preferred;
@@ -115,7 +123,7 @@ export function deriveCapabilityRoutes(
   const provider = requireProvider(providerId);
   const routes: Partial<Record<Capability, CapabilityRoute>> = {};
   for (const capability of provider.capabilities) {
-    const primary = pickModel(models, capability);
+    const primary = pickModel(models, capability, providerId);
     if (!primary) continue;
     const fallbacks = modelsForCapability(models, capability)
       .filter((model) => model.id !== primary.id)
@@ -160,7 +168,7 @@ export interface ResolvedRoute {
  */
 export function resolveCapabilityRoute(capability: Capability, config?: ProviderConfiguration): ResolvedRoute {
   const route = config?.routes?.[capability];
-  const providerId = route?.providerId ?? DEFAULT_PROVIDER_ID;
+  const providerId = route?.providerId ?? config?.defaultProviderId ?? DEFAULT_PROVIDER_ID;
   const adapter = requireProvider(providerId);
   return { capability, providerId, adapter, baseUrl: adapter.baseUrl, modelId: route?.modelId };
 }

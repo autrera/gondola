@@ -72,6 +72,7 @@ function recoveryGuidance(status: SetupStatusView): string {
 
 export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupStatusView; onReady: () => void }) {
   const [screen, setScreen] = useState<Screen>("welcome");
+  const [selectedProvider, setSelectedProvider] = useState<"venice" | "surplus">("venice");
   const [status, setStatus] = useState<SetupStatusView | undefined>(initialStatus);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -84,16 +85,15 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
   const [confirmation, setConfirmation] = useState<ApprovalPolicy>("risk_based");
 
   useEffect(() => {
-    if (initialStatus) return;
     let cancelled = false;
-    void fetch("/api/setup/status", { cache: "no-store" })
+    void fetch(`/api/setup/status?providerId=${selectedProvider}`, { cache: "no-store" })
       .then((response) => response.json())
       .then((body: SetupStatusView) => {
         if (!cancelled) setStatus(body);
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [initialStatus]);
+  }, [selectedProvider]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -103,9 +103,11 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
     else setError(recoveryGuidance(next));
   }, []);
 
+  const providerName = selectedProvider === "surplus" ? "Surplus Intelligence" : "Venice";
+
   const submitKey = useCallback(async () => {
     const trimmed = apiKey.trim();
-    if (!trimmed) { setError("Paste your Venice API key to continue."); return; }
+    if (!trimmed) { setError(`Paste your ${providerName} API key to continue.`); return; }
     setBusy(true);
     setError("");
     const controller = new AbortController();
@@ -114,14 +116,14 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
       const response = await fetch("/api/setup/credentials", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: trimmed }),
+        body: JSON.stringify({ providerId: selectedProvider, apiKey: trimmed }),
         signal: controller.signal,
       });
       const body = (await response.json()) as SetupStatusView;
       applyStatus(body);
     } catch (submitError) {
       if (!(submitError instanceof Error && submitError.name === "AbortError")) {
-        setError("Gondola couldn't reach Venice. Check your connection and try again.");
+        setError(`Gondola couldn't reach ${providerName}. Check your connection and try again.`);
       }
     } finally {
       // Never keep the credential in state beyond the submission lifecycle.
@@ -129,7 +131,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
       setBusy(false);
       abortRef.current = null;
     }
-  }, [apiKey, applyStatus]);
+  }, [apiKey, applyStatus, providerName, selectedProvider]);
 
   const useEnvCredential = useCallback(async () => {
     setBusy(true);
@@ -140,20 +142,20 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
       const response = await fetch("/api/setup/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ providerId: selectedProvider }),
         signal: controller.signal,
       });
       const body = (await response.json()) as SetupStatusView;
       applyStatus(body);
     } catch (verifyError) {
       if (!(verifyError instanceof Error && verifyError.name === "AbortError")) {
-        setError("Gondola couldn't reach Venice. Check your connection and try again.");
+        setError(`Gondola couldn't reach ${providerName}. Check your connection and try again.`);
       }
     } finally {
       setBusy(false);
       abortRef.current = null;
     }
-  }, [applyStatus]);
+  }, [applyStatus, providerName, selectedProvider]);
 
   const cancelVerify = useCallback(() => {
     abortRef.current?.abort();
@@ -181,7 +183,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
   }, [confirmation, fileAccess, onReady, shellAccess]);
 
   const provider = status?.provider;
-  const keyUrl = provider?.keyManagementUrl ?? "https://venice.ai/settings/api";
+  const keyUrl = provider?.keyManagementUrl ?? (selectedProvider === "surplus" ? "https://surplusintelligence.ai/keys" : "https://venice.ai/settings/api");
   const envDetected = Boolean(status?.credential.hasEnv);
 
   return (
@@ -205,49 +207,69 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
         {screen === "connect" && (
           <section className="onb-screen">
             <h1>Unlock the complete Gondola experience</h1>
-            <p className="onb-lead">One Venice API key gives Gondola access to models for reasoning, vision, search, speech, transcription, images, video, music, and embeddings.</p>
+            <p className="onb-lead">Select an inference provider to power Gondola with models for chat, reasoning, vision, search, and more.</p>
+            
+            <div className="onb-provider-selector">
+              <button
+                type="button"
+                className={`onb-provider-chip ${selectedProvider === "venice" ? "is-selected" : ""}`}
+                onClick={() => setSelectedProvider("venice")}
+              >
+                <strong>Venice AI</strong>
+                <small>Privacy-first capability layer</small>
+              </button>
+              <button
+                type="button"
+                className={`onb-provider-chip ${selectedProvider === "surplus" ? "is-selected" : ""}`}
+                onClick={() => setSelectedProvider("surplus")}
+              >
+                <strong>Surplus Intelligence</strong>
+                <small>GLM 5.2, DeepSeek v4, Grok 4.5</small>
+              </button>
+            </div>
+
             <ul className="onb-points">
               <li>Your key stays on this machine.</li>
               <li>You control what Gondola can access.</li>
               <li>You can override individual model roles later.</li>
             </ul>
-            <button className="onb-primary" onClick={() => setScreen("credential")}>Connect Venice</button>
+            <button className="onb-primary" onClick={() => setScreen("credential")}>Connect {providerName}</button>
             <button className="onb-link" onClick={() => setScreen("welcome")}>Back</button>
           </section>
         )}
 
         {screen === "credential" && (
           <section className="onb-screen">
-            <h1>Connect your Venice key</h1>
-            <p className="onb-lead">Paste your Venice inference key. Gondola verifies it with a live model check and a quick test message before saving it locally.</p>
+            <h1>Connect your {providerName} key</h1>
+            <p className="onb-lead">Paste your {providerName} API key. Gondola verifies it with a live model check and a quick test message before saving it locally.</p>
 
             {envDetected && (
               <div className="onb-env">
                 <div>
                   <strong>Environment key detected</strong>
-                  <small>A Venice key is already configured for this machine{status?.credential.maskedSuffix ? ` (${status.credential.maskedSuffix})` : ""}.</small>
+                  <small>A {providerName} key is already configured for this machine{status?.credential.maskedSuffix ? ` (${status.credential.maskedSuffix})` : ""}.</small>
                 </div>
                 <button className="onb-secondary" disabled={busy} onClick={() => void useEnvCredential()}>Use it</button>
               </div>
             )}
 
             <label className="onb-field">
-              <span>Venice API key</span>
+              <span>{providerName} API key</span>
               <input
                 type="password"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="Venice inference key"
+                placeholder={`${providerName} API key`}
                 value={apiKey}
                 disabled={busy}
                 onChange={(event) => setApiKey(event.target.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") void submitKey(); }}
               />
             </label>
-            <a className="onb-keylink" href={keyUrl} target="_blank" rel="noreferrer">Create or manage a Venice API key →</a>
+            <a className="onb-keylink" href={keyUrl} target="_blank" rel="noreferrer">Create or manage a {providerName} API key →</a>
 
             {error && <p className="onb-error" role="alert">{error}</p>}
-            {busy && <p className="onb-progress-text">Verifying with Venice…</p>}
+            {busy && <p className="onb-progress-text">Verifying with {providerName}…</p>}
 
             <div className="onb-actions">
               {busy
@@ -261,7 +283,7 @@ export function Onboarding({ initialStatus, onReady }: { initialStatus?: SetupSt
         {screen === "capabilities" && (
           <section className="onb-screen">
             <h1>Gondola is connected</h1>
-            <p className="onb-lead">Venice is verified{status?.credential.maskedSuffix ? ` (${status.credential.maskedSuffix})` : ""}. Here's what's ready, detected from your live model catalog. You can override any model role later.</p>
+            <p className="onb-lead">{providerName} is verified{status?.credential.maskedSuffix ? ` (${status.credential.maskedSuffix})` : ""}. Here's what's ready, detected from your live model catalog. You can override any model role later.</p>
             <div className="onb-caps">
               {CAPABILITY_LABELS.map(({ key, label, blurb }) => {
                 const ready = Boolean(status?.capabilities?.[key]);

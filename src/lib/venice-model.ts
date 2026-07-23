@@ -3,6 +3,7 @@ import { streamSimple as streamOpenAICompatible } from "@earendil-works/pi-ai/ap
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { completeApiTrace, describeApiTraceError, startApiTrace, traceRequestFromPayload, updateApiTrace, type ApiTraceUsage } from "./api-trace";
 import { observeBillingBalance } from "./billing-balance-state";
+import { resolveCredential } from "./credential-store";
 import { resolveCapabilityRoute } from "./providers/registry";
 import { getVeniceKey } from "./venice";
 
@@ -68,9 +69,12 @@ export function createVeniceStreamFn(timeoutMs = 120_000): StreamFn {
     const callerOnPayload = options?.onPayload;
     const callerOnResponse = options?.onResponse;
     let statusCode: number | undefined;
+    const defaultRoute = resolveCapabilityRoute("chat");
+    const providerId = (model.provider as string) || defaultRoute.providerId;
+    const apiKey = resolveCredential(providerId)?.apiKey ?? getVeniceKey(providerId);
     const stream = streamOpenAICompatible(model as Model<"openai-completions">, context, {
       ...options,
-      apiKey: getVeniceKey(),
+      apiKey,
       maxRetries: 0,
       timeoutMs,
       onPayload: async (payload, responseModel) => {
