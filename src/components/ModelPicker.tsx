@@ -52,7 +52,8 @@ function badgesFor(model: CatalogModel): OptionBadge[] {
 // The conversation runs through the Pi agent, which needs tool calling, so only
 // text models that advertise function calling are valid choices here.
 function isChatModel(model: CatalogModel): boolean {
-  return model.type === "text" && model.capabilities?.supportsFunctionCalling === true;
+  const isText = model.type === "text" || model.type === "chat" || model.type === "llm";
+  return isText && model.capabilities?.supportsFunctionCalling !== false;
 }
 
 const EFFORT_LABELS: Record<ReasoningEffort, string> = {

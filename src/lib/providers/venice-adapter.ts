@@ -120,10 +120,19 @@ function deriveModelCapabilities(model: RawVeniceModel): Capability[] {
 
 function toProviderModel(model: RawVeniceModel): ProviderModel {
   const spec = model.model_spec ?? {};
-  const capsObj = spec.capabilities ?? {
-    supportsFunctionCalling: model.type === "text" || model.type === "chat" || model.type === "llm",
-    supportsVision: deriveModelCapabilities(model).includes("vision"),
-    supportsReasoning: deriveModelCapabilities(model).includes("reasoning"),
+  const rawCaps = (spec.capabilities ?? {}) as Record<string, unknown>;
+  const isText = model.type === "text" || model.type === "chat" || model.type === "llm";
+  const capsObj: Record<string, boolean | number | string | string[]> = {
+    ...rawCaps,
+    supportsFunctionCalling: typeof rawCaps.supportsFunctionCalling === "boolean"
+      ? rawCaps.supportsFunctionCalling
+      : isText,
+    supportsVision: typeof rawCaps.supportsVision === "boolean"
+      ? rawCaps.supportsVision
+      : deriveModelCapabilities(model).includes("vision"),
+    supportsReasoning: typeof rawCaps.supportsReasoning === "boolean"
+      ? rawCaps.supportsReasoning
+      : deriveModelCapabilities(model).includes("reasoning"),
   };
   return {
     id: model.id,

@@ -62,11 +62,13 @@ export async function GET(request: Request) {
       capabilities: model.capabilitiesObject ?? (
         Array.isArray(model.capabilities)
           ? {
-              supportsFunctionCalling: model.type === "text",
+              supportsFunctionCalling: model.type === "text" || model.type === "chat" || model.type === "llm",
               supportsVision: model.capabilities.includes("vision"),
               supportsReasoning: model.capabilities.includes("reasoning"),
             }
-          : model.capabilities
+          : (model.capabilities ?? {
+              supportsFunctionCalling: model.type === "text" || model.type === "chat" || model.type === "llm",
+            })
       ),
       constraints: model.constraints,
       pricing: model.pricing,

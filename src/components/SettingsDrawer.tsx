@@ -92,7 +92,7 @@ export function SettingsDrawer({
   const groups = useMemo(() => {
     const isText = (m: CatalogModel) => m.type === "text" || m.type === "chat" || m.type === "llm";
     return {
-      chat: models.filter((model) => isText(model) && model.capabilities?.supportsFunctionCalling === true),
+      chat: models.filter((model) => isText(model) && model.capabilities?.supportsFunctionCalling !== false),
       vision: models.filter((model) => isText(model) && model.capabilities?.supportsVision === true),
       tts: models.filter((model) => model.type === "tts" || model.type === "speech"),
       asr: models.filter((model) => model.type === "stt" || model.type === "asr"),

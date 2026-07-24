@@ -179,8 +179,10 @@ export function saveCapabilityRoutes(
         mergedCapabilities[cap as Capability] = true;
       }
     }
+    const defaultChatModel = mergedRoutes.chat?.modelId ?? record.defaultChatModel;
     writeSetupRecord({
       ...record,
+      defaultChatModel,
       routes: mergedRoutes,
       capabilities: mergedCapabilities,
     });

@@ -855,7 +855,7 @@ function TaskProgressCard({
   );
 }
 
-function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
+function Workspace({ initialProviderId, initialDefaultChatModel }: { initialProviderId?: string; initialDefaultChatModel?: string } = {}) {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [action, setAction] = useState<AvatarAction>("neutral");
@@ -1244,10 +1244,11 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
     window.addEventListener("pointerdown", unlockSpeechAudio);
     window.addEventListener("keydown", unlockSpeechAudio);
     const saved = localStorage.getItem("nova-settings");
+    const baseDefaultChatModel = initialDefaultChatModel || DEFAULT_SETTINGS.chatModel;
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as Partial<AgentSettings>;
-        const migrated = { ...DEFAULT_SETTINGS, ...parsed };
+        const migrated = { ...DEFAULT_SETTINGS, chatModel: baseDefaultChatModel, ...parsed };
         if (!parsed.approvalPolicy) {
           try {
             const legacy = JSON.parse(localStorage.getItem("nova-onboarding-permissions") ?? "{}") as { confirmationPolicy?: string };
@@ -1270,7 +1271,7 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
           localStorage.setItem("nova-fluent-voice-v1", "1");
         }
         if (!localStorage.getItem("nova-smart-fast-models-v2")) {
-          if (!parsed.chatModel) migrated.chatModel = DEFAULT_SETTINGS.chatModel;
+          if (!parsed.chatModel) migrated.chatModel = baseDefaultChatModel;
           if (!parsed.visionModel) migrated.visionModel = DEFAULT_SETTINGS.visionModel;
           localStorage.setItem("nova-smart-fast-models-v2", "1");
         }
@@ -1278,6 +1279,8 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
       } catch {
         localStorage.removeItem("nova-settings");
       }
+    } else if (initialDefaultChatModel) {
+      setSettings((current) => ({ ...current, chatModel: initialDefaultChatModel }));
     }
 
     const providerParam = activeProviderId ? `?provider=${encodeURIComponent(activeProviderId)}` : "";
@@ -1293,7 +1296,7 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
         if (loadedModels.length > 0) {
           setSettings((current) => {
             const isText = (m: CatalogModel) => m.type === "text" || m.type === "chat" || m.type === "llm";
-            const chatCandidates = loadedModels.filter((m) => isText(m) && m.capabilities?.supportsFunctionCalling === true);
+            const chatCandidates = loadedModels.filter((m) => isText(m) && m.capabilities?.supportsFunctionCalling !== false);
             const visionCandidates = loadedModels.filter((m) => isText(m) && m.capabilities?.supportsVision === true);
             const ttsCandidates = loadedModels.filter((m) => m.type === "tts" || m.type === "speech");
             const sttCandidates = loadedModels.filter((m) => m.type === "stt" || m.type === "asr");
@@ -1303,6 +1306,7 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
 
             const pickModel = (currentId: string, candidates: CatalogModel[], preferredIds: string[] = []): string => {
               if (candidates.some((m) => m.id === currentId)) return currentId;
+              if (loadedModels.some((m) => m.id === currentId)) return currentId;
               for (const pref of preferredIds) {
                 const found = candidates.find((m) => m.id === pref);
                 if (found) return found.id;
@@ -1310,7 +1314,8 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
               return candidates[0]?.id ?? currentId;
             };
 
-            const nextChatModel = pickModel(current.chatModel, chatCandidates, ["glm-5.2", "deepseek-v4-flash", "zai-org-glm-5-2"]);
+            const chatDefaults = [initialDefaultChatModel, "glm-5.2", "deepseek-v4-flash", "zai-org-glm-5-2"].filter((id): id is string => Boolean(id));
+            const nextChatModel = pickModel(current.chatModel, chatCandidates, chatDefaults);
             const nextVisionModel = pickModel(current.visionModel, visionCandidates, ["grok-4.5", "claude-opus-4.5", "qwen3-6-27b"]);
             const nextTtsModel = pickModel(current.ttsModel, ttsCandidates, ["tts-xai-v1", "venice-kokoro-tts"]);
             const nextSttModel = pickModel(current.sttModel, sttCandidates, ["stt-xai-v1", "venice-whisper-large-v3"]);
@@ -1413,6 +1418,7 @@ function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
     localStorage.setItem("nova-settings", JSON.stringify(settings));
     const selectedModels = {
       chat: settings.chatModel,
+      reasoning: settings.chatModel,
       vision: settings.visionModel,
       speech: settings.ttsModel,
       transcription: settings.sttModel,
@@ -4827,7 +4833,7 @@ function OnboardingGate() {
   if (!ready) {
     return <Onboarding initialStatus={status} onReady={() => setReady(true)} />;
   }
-  return <Workspace initialProviderId={status?.providerId} />;
+  return <Workspace initialProviderId={status?.providerId} initialDefaultChatModel={status?.routes?.chat?.modelId ?? status?.defaultChatModel} />;
 }
 
 export default function Home() {
