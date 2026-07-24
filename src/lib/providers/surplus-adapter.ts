@@ -10,10 +10,32 @@ import type {
 
 const SURPLUS_BASE_URL = "https://api.surplusintelligence.ai/v1";
 
-interface RawSurplusModel {
+export interface RawSurplusCapabilities {
+  supportsFunctionCalling?: boolean;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
+  supportsReasoningEffort?: boolean;
+  supportsVideo?: boolean;
+  supportsVideoInput?: boolean;
+  supportsResponseSchema?: boolean;
+  availableContextTokens?: number;
+}
+
+export interface RawSurplusConstraints {
+  contextTokens?: number;
+}
+
+export interface RawSurplusModel {
   id: string;
-  name: string;
-  created: number;
+  type?: string;
+  name?: string;
+  beta?: boolean;
+  privacy?: string;
+  capabilities?: RawSurplusCapabilities;
+  constraints?: RawSurplusConstraints;
+  pricing?: Record<string, string>;
+  traits?: string[];
+  created?: number;
   description?: string;
   context_length?: number;
   architecture?: {
@@ -23,7 +45,6 @@ interface RawSurplusModel {
     tokenizer?: string;
     instruct_type?: string | null;
   };
-  pricing?: Record<string, string>;
   top_provider?: Record<string, unknown>;
   supported_parameters?: string[];
   supported_features?: string[];
@@ -93,20 +114,23 @@ const CAPABILITY_MESSAGES: Record<NonNullable<CredentialValidation["reason"]>, s
 const SURPLUS_CAPABILITIES: Capability[] = ["chat", "reasoning", "vision", "embedding"];
 
 /**
- * Map a model's supported_features to gondola capabilities.
- * - All text/text->text models are chat-capable
- * - "vision" feature → vision capability
- * - "reasoning" feature → reasoning capability
- * - "embedding" feature → embedding capability
+ * Map a model's properties (capabilities, traits, supported_features, type) to gondola capabilities.
+ * - Embedding models: type="embedding", id contains "embed", or traits/features include "embedding"
+ * - All text models get chat capability
+ * - "vision" capability/trait/feature → vision capability
+ * - "reasoning" capability/trait/feature → reasoning capability
  */
 function deriveModelCapabilities(model: RawSurplusModel): Capability[] {
-  const features = model.supported_features ?? [];
-  const featureSet = new Set(features.map((f: string) => f.toLowerCase()));
+  const type = model.type?.toLowerCase();
+  const traits = (model.traits ?? []).map((t: string) => t.toLowerCase());
+  const features = (model.supported_features ?? []).map((f: string) => f.toLowerCase());
+  const traitSet = new Set(traits);
+  const featureSet = new Set(features);
   const idLower = model.id.toLowerCase();
   const caps = new Set<Capability>();
 
-  // Embedding models: id contains "embed" or features include "embedding"
-  if (idLower.includes("embed") || featureSet.has("embedding")) {
+  // Embedding models: type is "embedding", id contains "embed", or traits/features include "embedding"
+  if (type === "embedding" || idLower.includes("embed") || traitSet.has("embedding") || featureSet.has("embedding")) {
     caps.add("embedding");
     return [...caps];
   }
@@ -114,41 +138,49 @@ function deriveModelCapabilities(model: RawSurplusModel): Capability[] {
   // All text models get chat by default
   caps.add("chat");
 
-  // Map supported features to capabilities
-  if (featureSet.has("vision")) caps.add("vision");
-  if (featureSet.has("reasoning")) caps.add("reasoning");
+  // Map capabilities, traits, and features to Gondola capabilities
+  if (model.capabilities?.supportsVision || traitSet.has("vision") || featureSet.has("vision")) {
+    caps.add("vision");
+  }
+
+  if (model.capabilities?.supportsReasoning || traitSet.has("reasoning") || featureSet.has("reasoning")) {
+    caps.add("reasoning");
+  }
 
   return SURPLUS_CAPABILITIES.filter((c) => caps.has(c));
 }
 
 /**
- * Derive gondola type from the surplus model's features.
- * Embedding models → "embedding", everything else → "text" (matching how
- * Venice types work — text models with vision features vs image models).
+ * Derive gondola type from the surplus model's type, traits, or features.
+ * Embedding models → "embedding", everything else → "text".
  */
 function deriveModelType(model: RawSurplusModel): string {
+  if (model.type) return model.type;
   const idLower = model.id.toLowerCase();
   const features = model.supported_features ?? [];
-  if (idLower.includes("embed") || features.includes("embedding")) return "embedding";
+  const traits = model.traits ?? [];
+  if (idLower.includes("embed") || features.includes("embedding") || traits.includes("embedding")) return "embedding";
   return "text";
 }
 
 function deriveSurplusCapabilitiesObject(model: RawSurplusModel): Record<string, boolean | number | string | string[]> {
-  const features = model.supported_features ?? [];
-  const featureSet = new Set(features.map((f: string) => f.toLowerCase()));
-  const params = model.supported_parameters ?? [];
-  const paramSet = new Set(params.map((p: string) => p.toLowerCase()));
+  const traits = (model.traits ?? []).map((t: string) => t.toLowerCase());
+  const traitSet = new Set(traits);
+  const features = (model.supported_features ?? []).map((f: string) => f.toLowerCase());
+  const featureSet = new Set(features);
+  const params = (model.supported_parameters ?? []).map((p: string) => p.toLowerCase());
+  const paramSet = new Set(params);
   const inputModalities = (model.architecture?.input_modalities ?? []).map((m: string) => m.toLowerCase());
   const type = deriveModelType(model);
   const isText = type === "text";
 
-  const supportsFunctionCalling = isText;
-
-  const supportsVision = featureSet.has("vision") || inputModalities.includes("image");
-  const supportsReasoning = featureSet.has("reasoning") || featureSet.has("thinking");
-  const supportsReasoningEffort = supportsReasoning || featureSet.has("reasoning_effort") || featureSet.has("reasoning-effort");
-  const supportsVideo = featureSet.has("video") || inputModalities.includes("video");
-  const supportsResponseSchema = featureSet.has("structured_outputs") || featureSet.has("response_format") || paramSet.has("response_format");
+  const supportsFunctionCalling = model.capabilities?.supportsFunctionCalling ?? (isText || traitSet.has("tools") || featureSet.has("tools"));
+  const supportsVision = model.capabilities?.supportsVision ?? (traitSet.has("vision") || featureSet.has("vision") || inputModalities.includes("image"));
+  const supportsReasoning = model.capabilities?.supportsReasoning ?? (traitSet.has("reasoning") || featureSet.has("reasoning") || featureSet.has("thinking"));
+  const supportsReasoningEffort = model.capabilities?.supportsReasoningEffort ?? (supportsReasoning || traitSet.has("reasoning_effort") || featureSet.has("reasoning_effort") || featureSet.has("reasoning-effort"));
+  const supportsVideo = model.capabilities?.supportsVideo ?? (traitSet.has("video") || featureSet.has("video") || inputModalities.includes("video"));
+  const supportsVideoInput = model.capabilities?.supportsVideoInput ?? supportsVideo;
+  const supportsResponseSchema = model.capabilities?.supportsResponseSchema ?? (traitSet.has("structured_outputs") || traitSet.has("json_mode") || featureSet.has("structured_outputs") || featureSet.has("response_format") || paramSet.has("response_format"));
 
   const capsObj: Record<string, boolean | number | string | string[]> = {
     supportsFunctionCalling,
@@ -156,12 +188,13 @@ function deriveSurplusCapabilitiesObject(model: RawSurplusModel): Record<string,
     supportsReasoning,
     supportsReasoningEffort,
     supportsVideo,
-    supportsVideoInput: supportsVideo,
+    supportsVideoInput,
     supportsResponseSchema,
   };
 
-  if (typeof model.context_length === "number" && model.context_length > 0) {
-    capsObj.availableContextTokens = model.context_length;
+  const contextTokens = model.capabilities?.availableContextTokens ?? model.constraints?.contextTokens ?? model.context_length;
+  if (typeof contextTokens === "number" && contextTokens > 0) {
+    capsObj.availableContextTokens = contextTokens;
   }
 
   return capsObj;
@@ -171,17 +204,18 @@ function toProviderModel(model: RawSurplusModel): ProviderModel {
   const name = model.name ?? model.id;
   const idLower = model.id.toLowerCase();
   const nameLower = name.toLowerCase();
+  const contextTokens = model.constraints?.contextTokens ?? model.capabilities?.availableContextTokens ?? model.context_length;
   return {
     id: model.id,
     type: deriveModelType(model),
     name,
     capabilities: deriveModelCapabilities(model),
     capabilitiesObject: deriveSurplusCapabilitiesObject(model),
-    constraints: model.context_length ? { contextTokens: model.context_length } : undefined,
+    constraints: contextTokens ? { contextTokens } : undefined,
     pricing: model.pricing,
-    traits: model.supported_features,
-    beta: idLower.includes("beta") || nameLower.includes("beta"),
-    privacy: "private",
+    traits: model.traits ?? model.supported_features,
+    beta: model.beta ?? (idLower.includes("beta") || nameLower.includes("beta")),
+    privacy: model.privacy ?? "private",
     raw: model as unknown as Record<string, unknown>,
   };
 }
@@ -199,8 +233,8 @@ async function fetchCatalog(credential: ProviderCredential, signal?: AbortSignal
     const upstream = await safeUpstreamMessage(response);
     throw new ProviderError(upstream ?? CAPABILITY_MESSAGES[reason], reason, response.status);
   }
-  const body = await response.json() as { data?: RawSurplusModel[] };
-  const rawModels = Array.isArray(body.data) ? body.data : [];
+  const body = await response.json() as { data?: RawSurplusModel[]; models?: RawSurplusModel[] };
+  const rawModels = Array.isArray(body.models) ? body.models : Array.isArray(body.data) ? body.data : [];
 
   // Safety net: hardcoded fallbacks for empty-catalog edge cases
   // (e.g. network error that didn't throw, or an API that returned valid JSON with no models).

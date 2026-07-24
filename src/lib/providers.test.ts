@@ -189,6 +189,92 @@ test("surplus adapter maps embedding models and edge cases correctly", async () 
   }
 });
 
+test("surplus adapter parses models matching surplus_models.json schema", async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    models: [
+      {
+        id: "aion-labs.aion-2-0",
+        type: "text",
+        name: "Aion 2.0",
+        beta: false,
+        privacy: "private",
+        capabilities: {
+          supportsFunctionCalling: true,
+          supportsVision: false,
+          supportsReasoning: true,
+          supportsReasoningEffort: true,
+          supportsVideo: false,
+          supportsVideoInput: false,
+          supportsResponseSchema: false,
+          availableContextTokens: 128000,
+        },
+        constraints: { contextTokens: 128000 },
+        pricing: { prompt: "0.0000010000", completion: "0.0000020000" },
+        traits: ["streaming", "reasoning"],
+      },
+      {
+        id: "claude-opus-4.5",
+        type: "text",
+        name: "Claude Opus 4.5",
+        beta: false,
+        privacy: "private",
+        capabilities: {
+          supportsFunctionCalling: true,
+          supportsVision: true,
+          supportsReasoning: true,
+          supportsReasoningEffort: true,
+          supportsVideo: false,
+          supportsVideoInput: false,
+          supportsResponseSchema: true,
+          availableContextTokens: 198000,
+        },
+        constraints: { contextTokens: 198000 },
+        pricing: { prompt: "0.0000050000", completion: "0.0000250000" },
+        traits: ["streaming", "tools", "vision", "reasoning"],
+      },
+      {
+        id: "venice-embed-1",
+        type: "embedding",
+        name: "Venice Embeddings 1",
+        beta: false,
+        privacy: "private",
+        capabilities: {
+          supportsFunctionCalling: false,
+          supportsVision: false,
+          supportsReasoning: false,
+          supportsReasoningEffort: false,
+          supportsVideo: false,
+          supportsVideoInput: false,
+          supportsResponseSchema: false,
+        },
+        pricing: { prompt: "0.0000001000" },
+        traits: ["embedding"],
+      },
+    ],
+  }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+  const models = await surplusAdapter.listModels({ providerId: "surplus", apiKey: "sk-surplus-key", source: "file" });
+  assert.equal(models.length, 3);
+
+  const aion = models.find((m) => m.id === "aion-labs.aion-2-0");
+  assert.ok(aion);
+  assert.equal(aion?.type, "text");
+  assert.deepEqual(aion?.capabilities, ["chat", "reasoning"]);
+  assert.equal(aion?.constraints?.contextTokens, 128000);
+  assert.equal(aion?.capabilitiesObject?.supportsReasoning, true);
+
+  const claude = models.find((m) => m.id === "claude-opus-4.5");
+  assert.ok(claude);
+  assert.equal(claude?.type, "text");
+  assert.deepEqual(claude?.capabilities, ["chat", "reasoning", "vision"]);
+  assert.equal(claude?.capabilitiesObject?.supportsVision, true);
+
+  const embed = models.find((m) => m.id === "venice-embed-1");
+  assert.ok(embed);
+  assert.equal(embed?.type, "embedding");
+  assert.deepEqual(embed?.capabilities, ["embedding"]);
+});
+
 test("resolveDefaultProviderId dynamically inspects configured credentials", () => {
   assert.equal(resolveDefaultProviderId((id) => id === "venice"), "venice");
   assert.equal(resolveDefaultProviderId((id) => id === "surplus"), "surplus");
