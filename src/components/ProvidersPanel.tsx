@@ -24,6 +24,7 @@ const CAPS: Array<{ key: string; label: string }> = [
 type Busy = "" | "test" | "discover" | "reset" | "remove" | "replace" | "diagnose";
 
 export function ProvidersPanel() {
+  const [selectedProvider, setSelectedProvider] = useState<"venice" | "surplus">("venice");
   const [status, setStatus] = useState<SetupStatusView>();
   const [busy, setBusy] = useState<Busy>("");
   const [note, setNote] = useState("");
@@ -31,14 +32,16 @@ export function ProvidersPanel() {
   const [replacing, setReplacing] = useState(false);
   const [newKey, setNewKey] = useState("");
 
+  const providerName = selectedProvider === "surplus" ? "Surplus Intelligence" : "Venice AI";
+
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/setup/status", { cache: "no-store" });
+      const response = await fetch(`/api/setup/status?providerId=${selectedProvider}`, { cache: "no-store" });
       setStatus((await response.json()) as SetupStatusView);
     } catch {
       setError("Could not read setup status.");
     }
-  }, []);
+  }, [selectedProvider]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -52,11 +55,11 @@ export function ProvidersPanel() {
       if (result.note) setNote(result.note);
       if (result.error) setError(result.error);
     } catch {
-      setError("Gondola couldn't reach Venice. Check your connection and try again.");
+      setError(`Gondola couldn't reach ${providerName}. Check your connection and try again.`);
     } finally {
       setBusy("");
     }
-  }, []);
+  }, [providerName]);
 
   const postJson = async (path: string, body: unknown) => {
     const response = await fetch(path, {
@@ -68,12 +71,12 @@ export function ProvidersPanel() {
   };
 
   const testConnection = () => run("test", async () => {
-    const next = await postJson("/api/setup/verify", {});
+    const next = await postJson("/api/setup/verify", { providerId: selectedProvider });
     return { status: next, note: next.state === "ready" ? "Connection verified." : undefined, error: next.state === "ready" ? undefined : (next.message ?? "Verification failed.") };
   });
 
   const runDiagnostics = () => run("diagnose", async () => {
-    const next = await postJson("/api/setup/verify", {});
+    const next = await postJson("/api/setup/verify", { providerId: selectedProvider });
     const summary = next.state === "ready"
       ? `Catalog + test completion OK. ${Object.values(next.capabilities ?? {}).filter(Boolean).length} capabilities ready.`
       : (next.message ?? "Diagnostics failed.");
@@ -81,17 +84,17 @@ export function ProvidersPanel() {
   });
 
   const rediscover = () => run("discover", async () => {
-    const next = await postJson("/api/setup/repair", {});
+    const next = await postJson("/api/setup/repair", { providerId: selectedProvider });
     return { status: next, note: next.state === "ready" ? "Model discovery refreshed." : undefined, error: next.state === "ready" ? undefined : (next.message ?? "Discovery failed.") };
   });
 
   const resetRoutes = () => run("reset", async () => {
-    const next = await postJson("/api/setup/repair", {});
-    return { status: next, note: next.state === "ready" ? "Capability routes reset to Venice defaults." : undefined, error: next.state === "ready" ? undefined : (next.message ?? "Reset failed.") };
+    const next = await postJson("/api/setup/repair", { providerId: selectedProvider });
+    return { status: next, note: next.state === "ready" ? `Capability routes reset to ${providerName} defaults.` : undefined, error: next.state === "ready" ? undefined : (next.message ?? "Reset failed.") };
   });
 
   const removeCredential = () => run("remove", async () => {
-    const response = await fetch("/api/setup/credentials", { method: "DELETE" });
+    const response = await fetch(`/api/setup/credentials?providerId=${selectedProvider}`, { method: "DELETE" });
     const next = (await response.json()) as SetupStatusView;
     return { status: next, note: "Local credential removed." };
   });
@@ -99,7 +102,7 @@ export function ProvidersPanel() {
   const saveNewKey = () => run("replace", async () => {
     const trimmed = newKey.trim();
     if (!trimmed) return { error: "Enter a key to save." };
-    const next = await postJson("/api/setup/credentials", { apiKey: trimmed, override: true });
+    const next = await postJson("/api/setup/credentials", { providerId: selectedProvider, apiKey: trimmed, override: true });
     setNewKey("");
     if (next.state === "ready") setReplacing(false);
     return { status: next, note: next.state === "ready" ? "Credential replaced." : undefined, error: next.state === "ready" ? undefined : (next.message ?? "Verification failed.") };
@@ -118,15 +121,32 @@ export function ProvidersPanel() {
     <section className="settings-group">
       <div className="settings-group-heading">
         <h3>Providers and capabilities</h3>
-        <p>Venice is Gondola&apos;s default capability layer. Everything runs locally against your own key.</p>
+        <p>Manage inference providers and capability routes. Everything runs locally against your own keys.</p>
+      </div>
+
+      <div className="prov-selector-tabs">
+        <button
+          type="button"
+          className={`prov-tab ${selectedProvider === "venice" ? "is-active" : ""}`}
+          onClick={() => { setSelectedProvider("venice"); setReplacing(false); setError(""); setNote(""); }}
+        >
+          Venice AI
+        </button>
+        <button
+          type="button"
+          className={`prov-tab ${selectedProvider === "surplus" ? "is-active" : ""}`}
+          onClick={() => { setSelectedProvider("surplus"); setReplacing(false); setError(""); setNote(""); }}
+        >
+          Surplus Intelligence
+        </button>
       </div>
 
       <div className="prov-header">
         <div className="prov-id">
           <span className={`prov-dot ${connected ? "is-on" : ""}`} aria-hidden="true" />
           <div>
-            <strong>Venice</strong>
-            <small>{stateLabel} · Default capability layer</small>
+            <strong>{providerName}</strong>
+            <small>{stateLabel} · {selectedProvider === "surplus" ? "GLM 5.2, DeepSeek v4, Grok 4.5" : "Default capability layer"}</small>
           </div>
         </div>
         <div className="prov-cred">
@@ -144,7 +164,7 @@ export function ProvidersPanel() {
             return (
               <div key={key} className={`prov-cap ${ready ? "is-ready" : "is-off"}`}>
                 <span className="prov-cap-label">{label}</span>
-                <span className="prov-cap-model">{ready ? (model ?? "Venice") : "—"}</span>
+                <span className="prov-cap-model">{ready ? (model ?? providerName) : "—"}</span>
               </div>
             );
           })}
@@ -153,8 +173,8 @@ export function ProvidersPanel() {
 
       {replacing && (
         <label className="settings-field">
-          <span className="field-heading"><span>New Venice key</span><small>Overrides the environment key</small></span>
-          <input type="password" autoComplete="off" spellCheck={false} placeholder="Venice inference key" value={newKey} onChange={(event) => setNewKey(event.target.value)} />
+          <span className="field-heading"><span>New {providerName} key</span><small>Overrides the environment key</small></span>
+          <input type="password" autoComplete="off" spellCheck={false} placeholder={`${providerName} API key`} value={newKey} onChange={(event) => setNewKey(event.target.value)} />
         </label>
       )}
 

@@ -3,16 +3,17 @@ import { streamSimple as streamOpenAICompatible } from "@earendil-works/pi-ai/ap
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { completeApiTrace, describeApiTraceError, startApiTrace, traceRequestFromPayload, updateApiTrace, type ApiTraceUsage } from "./api-trace";
 import { observeBillingBalance } from "./billing-balance-state";
+import { resolveCredential } from "./credential-store";
 import { resolveCapabilityRoute } from "./providers/registry";
 import { getVeniceKey } from "./venice";
 
-// Shared description of a Venice model over the OpenAI-completions API shape and
-// the streaming function that talks to Venice. Used by both the primary agent
-// and delegated sub-agents so there is a single source of truth.
+// Shared description of an OpenAI-compatible model and the streaming function
+// that talks to the configured inference provider. Used by both the primary
+// agent and delegated sub-agents so there is a single source of truth.
 
 export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReasoningEffort?: boolean; maxTokens?: number }): Model<"openai-completions"> {
-  // Resolve the provider + base URL through the capability registry instead of
-  // hardcoding Venice, so a future per-capability override is a real code path.
+  // Resolve the provider + base URL through the capability registry so a
+  // per-capability override is a real code path.
   const route = resolveCapabilityRoute("chat");
   return {
     id,
@@ -68,9 +69,12 @@ export function createVeniceStreamFn(timeoutMs = 120_000): StreamFn {
     const callerOnPayload = options?.onPayload;
     const callerOnResponse = options?.onResponse;
     let statusCode: number | undefined;
+    const defaultRoute = resolveCapabilityRoute("chat");
+    const providerId = (model.provider as string) || defaultRoute.providerId;
+    const apiKey = getVeniceKey(providerId);
     const stream = streamOpenAICompatible(model as Model<"openai-completions">, context, {
       ...options,
-      apiKey: getVeniceKey(),
+      apiKey,
       maxRetries: 0,
       timeoutMs,
       onPayload: async (payload, responseModel) => {

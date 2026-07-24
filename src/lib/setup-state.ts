@@ -18,28 +18,13 @@ import {
 import { ProviderError } from "./providers/types";
 import type { Capability, CapabilityRoute, ProviderErrorReason, ProviderModel } from "./providers/types";
 
-// SERVER-ONLY. The single first-run authority shared by the web app and the CLI.
-// A setup is "ready" ONLY after a live catalog request succeeds, a minimal real
-// chat completion succeeds, a default conversation model is chosen, and
-// capability defaults are derived. The presence of a key string is never enough.
+// ...
 
-export type SetupState =
-  | "not_configured"
-  | "credential_detected"
-  | "verifying"
-  | "invalid_credential"
-  | "inference_failed"
-  | "unreachable"
-  | "ready"
-  | "repair_required";
-
-// User-facing, sanitized copy per failure reason. Keeps an outage ("unreachable")
-// from being reported as a rejected key.
 const CATALOG_FAILURE_MESSAGES: Record<ProviderErrorReason, string> = {
-  invalid_credential: "Venice rejected this key. Check that you copied the full inference key.",
-  no_credits: "This Venice key has no available credits. Add credits, then verify again.",
-  unreachable: "Gondola couldn't reach Venice. Check your connection and try again.",
-  unknown: "Venice could not verify this key right now. Try again in a moment.",
+  invalid_credential: "The provider rejected this key. Check that you copied the correct API key.",
+  no_credits: "This key has no available credits. Add credits, then verify again.",
+  unreachable: "Gondola could not reach the provider. Check your connection and try again.",
+  unknown: "The provider could not verify this key right now. Try again in a moment.",
 };
 
 interface SetupRecord {
@@ -52,6 +37,16 @@ interface SetupRecord {
   capabilities: Record<Capability, boolean>;
   routes: Partial<Record<Capability, CapabilityRoute>>;
 }
+
+export type SetupState =
+  | "not_configured"
+  | "credential_detected"
+  | "verifying"
+  | "invalid_credential"
+  | "inference_failed"
+  | "unreachable"
+  | "ready"
+  | "repair_required";
 
 export interface SetupStatus {
   state: SetupState;
@@ -137,8 +132,11 @@ export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupS
   };
 }
 
-export function isSetupReady(providerId: string = DEFAULT_PROVIDER_ID): boolean {
-  return getSetupStatus(providerId).state === "ready";
+export function isSetupReady(providerId?: string): boolean {
+  if (providerId) {
+    return getSetupStatus(providerId).state === "ready";
+  }
+  return getSetupStatus(DEFAULT_PROVIDER_ID).state === "ready";
 }
 
 export interface VerifyOptions {
@@ -189,7 +187,7 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
       provider: info,
       credential: getCredentialStatus(providerId),
       reason,
-      message: CATALOG_FAILURE_MESSAGES[reason],
+      message: (error instanceof ProviderError ? error.message : undefined) ?? CATALOG_FAILURE_MESSAGES[reason],
     };
   }
 

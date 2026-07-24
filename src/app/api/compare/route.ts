@@ -1,10 +1,11 @@
+import { resolveCredential } from "@/lib/credential-store";
+import { requireProvider, resolveCapabilityRoute } from "@/lib/providers/registry";
 import { rejectUntrustedLocalRequest } from "@/lib/request-security";
 import { getVeniceKey, toPublicError } from "@/lib/venice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const MAX_PROMPT_CHARS = 8_000;
 const MAX_SYSTEM_CHARS = 2_000;
 const MAX_COMPLETION_TOKENS = 1_200;
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
   const rejected = rejectUntrustedLocalRequest(request);
   if (rejected) return rejected;
 
-  let body: { prompt?: unknown; model?: unknown; system?: unknown };
+  let body: { prompt?: unknown; model?: unknown; system?: unknown; providerId?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -27,12 +28,19 @@ export async function POST(request: Request) {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const model = typeof body.model === "string" ? body.model.trim() : "";
   const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_SYSTEM_CHARS) : "";
+  const requestedProviderId = typeof body.providerId === "string" ? body.providerId.trim() : undefined;
   if (!prompt || !model) {
     return Response.json({ error: "A prompt and a model are required." }, { status: 400 });
   }
   if (prompt.length > MAX_PROMPT_CHARS) {
     return Response.json({ error: `Prompt is too long (max ${MAX_PROMPT_CHARS} characters).` }, { status: 400 });
   }
+
+  const route = resolveCapabilityRoute("chat");
+  const providerId = requestedProviderId ?? route.providerId;
+  const adapter = requireProvider(providerId);
+  const baseUrl = adapter.baseUrl;
+  const key = resolveCredential(providerId)?.apiKey ?? getVeniceKey(providerId);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -55,11 +63,11 @@ export async function POST(request: Request) {
         const messages = system
           ? [{ role: "system", content: system }, { role: "user", content: prompt }]
           : [{ role: "user", content: prompt }];
-        const response = await fetch(`${VENICE_BASE_URL}/chat/completions`, {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${getVeniceKey()}`,
+            Authorization: `Bearer ${key}`,
           },
           body: JSON.stringify({
             model,
@@ -67,13 +75,15 @@ export async function POST(request: Request) {
             messages,
             max_completion_tokens: MAX_COMPLETION_TOKENS,
             stream_options: { include_usage: true },
-            venice_parameters: {
-              enable_web_search: "off",
-              enable_web_scraping: false,
-              include_venice_system_prompt: false,
-              disable_thinking: true,
-              strip_thinking_response: true,
-            },
+            ...(providerId === "venice" ? {
+              venice_parameters: {
+                enable_web_search: "off",
+                enable_web_scraping: false,
+                include_venice_system_prompt: false,
+                disable_thinking: true,
+                strip_thinking_response: true,
+              },
+            } : {}),
           }),
           signal: upstream.signal,
           cache: "no-store",

@@ -14,8 +14,9 @@ export async function POST(request: Request) {
   const parsed = await readLimitedJson(request);
   if (!parsed.ok) return parsed.response;
   if (!rateLimit("setup:verify")) return rateLimited();
+  const providerId = typeof parsed.body?.providerId === "string" ? parsed.body.providerId.trim() : undefined;
   try {
-    const status = await verifySetup({ signal: request.signal });
+    const status = await verifySetup({ providerId, signal: request.signal });
     return Response.json(status, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (isAbortError(error)) return clientClosed();

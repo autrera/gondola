@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
@@ -21,7 +21,16 @@ export function ffprobePath(): string | null {
 }
 
 export function mediaToolingAvailable(): boolean {
-  return Boolean(ffmpegPath() && ffprobePath());
+  const ffmpeg = ffmpegPath();
+  const ffprobe = ffprobePath();
+  if (!ffmpeg || !ffprobe) return false;
+  try {
+    execFileSync(ffmpeg, ["-version"], { stdio: "ignore" });
+    execFileSync(ffprobe, ["-version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type Orientation = "portrait" | "landscape" | "square";
