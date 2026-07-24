@@ -13,7 +13,9 @@ import {
   DEFAULT_PROVIDER_ID,
   deriveCapabilityRoutes,
   detectAvailableCapabilities,
+  getProvider,
   requireProvider,
+  resolveDefaultProviderId,
 } from "./providers/registry";
 import { ProviderError } from "./providers/types";
 import type { Capability, CapabilityRoute, ProviderErrorReason, ProviderModel } from "./providers/types";
@@ -97,20 +99,30 @@ function providerInfo(providerId: string) {
   return { id: provider.id, name: provider.name, keyManagementUrl: provider.keyManagementUrl };
 }
 
+export function resolveActiveProviderId(providerId?: string): string {
+  if (providerId) return providerId;
+  const record = readSetupRecord();
+  if (record?.providerId && getProvider(record.providerId) && resolveCredential(record.providerId)) {
+    return record.providerId;
+  }
+  return resolveDefaultProviderId();
+}
+
 /**
  * Steady-state setup status derived from the persisted verification + the
  * currently resolved credential. Does not perform network calls.
  */
-export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupStatus {
-  const credential = getCredentialStatus(providerId);
-  const provider = providerInfo(providerId);
-  const base: SetupStatus = { state: "not_configured", providerId, provider, credential };
+export function getSetupStatus(providerId?: string): SetupStatus {
+  const activeProviderId = resolveActiveProviderId(providerId);
+  const credential = getCredentialStatus(activeProviderId);
+  const provider = providerInfo(activeProviderId);
+  const base: SetupStatus = { state: "not_configured", providerId: activeProviderId, provider, credential };
 
-  const resolved = resolveCredential(providerId);
+  const resolved = resolveCredential(activeProviderId);
   if (!resolved) return base;
 
   const record = readSetupRecord();
-  if (!record || record.providerId !== providerId) {
+  if (!record || record.providerId !== activeProviderId) {
     return { ...base, state: "credential_detected" };
   }
   // Compare a non-reversible fingerprint of the full key, not the display suffix:
@@ -133,10 +145,7 @@ export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupS
 }
 
 export function isSetupReady(providerId?: string): boolean {
-  if (providerId) {
-    return getSetupStatus(providerId).state === "ready";
-  }
-  return getSetupStatus(DEFAULT_PROVIDER_ID).state === "ready";
+  return getSetupStatus(providerId).state === "ready";
 }
 
 export interface VerifyOptions {
@@ -154,7 +163,7 @@ export interface VerifyOptions {
  * move setup to "ready". Nothing is persisted unless every check passes.
  */
 export async function verifySetup(options: VerifyOptions = {}): Promise<SetupStatus> {
-  const providerId = options.providerId ?? DEFAULT_PROVIDER_ID;
+  const providerId = options.providerId ?? resolveActiveProviderId();
   const provider = requireProvider(providerId);
   const info = providerInfo(providerId);
 
@@ -213,7 +222,7 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
       provider: info,
       credential: getCredentialStatus(providerId),
       reason: probe.reason,
-      message: probe.message ?? "A test message to Venice did not succeed.",
+      message: probe.message ?? `A test message to ${info.name} did not succeed.`,
     };
   }
 

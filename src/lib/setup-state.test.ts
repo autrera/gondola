@@ -6,7 +6,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { clearApiTraces, listApiTraces } from "./api-trace";
 import { SMART_FAST_CHAT_MODEL } from "./app-types";
 import { maskSuffix, resolveCredential, writeStoredCredential } from "./credential-store";
-import { getSetupStatus, isSetupReady, verifySetup } from "./setup-state";
+import { getSetupStatus, isSetupReady, resolveActiveProviderId, verifySetup } from "./setup-state";
 
 const KEY = "sk-secret-abcd-1234";
 
@@ -34,17 +34,30 @@ function mockVenice(opts: { catalog?: { status: number; body: unknown }; chat?: 
   }) as typeof fetch;
 }
 
+function mockSurplus(opts: { catalog?: { status: number; body: unknown }; chat?: { status: number; body: unknown } } = {}) {
+  const catalog = opts.catalog ?? { status: 200, body: { data: [{ id: "glm-5.2" }] } };
+  const chat = opts.chat ?? { status: 200, body: { choices: [{ message: { content: "pong" } }] } };
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (init?.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+    const pick = String(url).includes("/chat/completions") ? chat : catalog;
+    return new Response(JSON.stringify(pick.body), { status: pick.status, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+}
+
 function homeDir(): string {
   return process.env.GONDOLA_HOME as string;
 }
 
 let savedKey: string | undefined;
+let savedSurplusKey: string | undefined;
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
   process.env.GONDOLA_HOME = mkdtempSync(path.join(os.tmpdir(), "gondola-setup-test-"));
   savedKey = process.env.VENICE_API_KEY;
+  savedSurplusKey = process.env.SURPLUS_API_KEY;
   delete process.env.VENICE_API_KEY;
+  delete process.env.SURPLUS_API_KEY;
   originalFetch = globalThis.fetch;
   clearApiTraces();
 });
@@ -53,6 +66,8 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (savedKey === undefined) delete process.env.VENICE_API_KEY;
   else process.env.VENICE_API_KEY = savedKey;
+  if (savedSurplusKey === undefined) delete process.env.SURPLUS_API_KEY;
+  else process.env.SURPLUS_API_KEY = savedSurplusKey;
   delete process.env.GONDOLA_HOME;
 });
 
@@ -167,3 +182,42 @@ test("a connection failure is reported as unreachable, not a rejected key", asyn
   assert.ok(!/rejected this key/i.test(result.message ?? ""));
   assert.equal(resolveCredential("venice"), null);
 });
+
+test("resolves surplus provider when VENICE_API_KEY is absent and SURPLUS_API_KEY is configured", async () => {
+  process.env.SURPLUS_API_KEY = "sk-surplus-secret-1234";
+
+  // 1. Unparameterized setup status detects Surplus credential
+  const initialStatus = getSetupStatus();
+  assert.equal(initialStatus.providerId, "surplus");
+  assert.equal(initialStatus.state, "credential_detected");
+  assert.equal(isSetupReady(), false);
+  assert.equal(resolveActiveProviderId(), "surplus");
+
+  // 2. Verification resolves Surplus dynamically and persists setup.json record
+  mockSurplus();
+  const verifyResult = await verifySetup();
+  assert.equal(verifyResult.providerId, "surplus");
+  assert.equal(verifyResult.state, "ready");
+
+  // 3. Subsequent unparameterized getSetupStatus reports Surplus as ready
+  const statusAfterVerify = getSetupStatus();
+  assert.equal(statusAfterVerify.providerId, "surplus");
+  assert.equal(statusAfterVerify.state, "ready");
+  assert.equal(isSetupReady(), true);
+});
+
+test("persisted surplus setup record takes precedence when both credentials are present", async () => {
+  process.env.SURPLUS_API_KEY = "sk-surplus-secret-1234";
+  mockSurplus();
+  await verifySetup(); // verifies Surplus and creates setup.json with providerId='surplus'
+
+  // Now set VENICE_API_KEY as well
+  process.env.VENICE_API_KEY = "sk-venice-secret-5678";
+
+  // getSetupStatus() should still resolve 'surplus' as active since setup.json has providerId='surplus' and surplus credential is valid
+  const status = getSetupStatus();
+  assert.equal(status.providerId, "surplus");
+  assert.equal(status.state, "ready");
+  assert.equal(isSetupReady(), true);
+});
+
