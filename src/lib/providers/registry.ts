@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS } from "../app-types";
+import { resolveCredential } from "../credential-store";
 import { surplusAdapter } from "./surplus-adapter";
 import { veniceAdapter } from "./venice-adapter";
 import {
@@ -17,6 +18,20 @@ const ADAPTERS: Record<string, ProviderAdapter> = {
 };
 
 export const DEFAULT_PROVIDER_ID = "venice" as const;
+
+export function resolveDefaultProviderId(
+  hasCredential?: (providerId: string) => boolean,
+  preferredId: string = DEFAULT_PROVIDER_ID,
+): string {
+  const checkCredential = hasCredential ?? ((id: string) => Boolean(resolveCredential(id)));
+  if (checkCredential(preferredId)) return preferredId;
+  for (const provider of listProviders()) {
+    if (checkCredential(provider.id)) {
+      return provider.id;
+    }
+  }
+  return preferredId;
+}
 
 export function listProviders(): ProviderAdapter[] {
   return Object.values(ADAPTERS);
@@ -166,9 +181,14 @@ export interface ResolvedRoute {
  * is a real code path, not just settings metadata.
  * Falls back to the default provider when unrouted.
  */
-export function resolveCapabilityRoute(capability: Capability, config?: ProviderConfiguration): ResolvedRoute {
+export function resolveCapabilityRoute(
+  capability: Capability,
+  config?: ProviderConfiguration,
+  hasCredential?: (providerId: string) => boolean,
+): ResolvedRoute {
   const route = config?.routes?.[capability];
-  const providerId = route?.providerId ?? config?.defaultProviderId ?? DEFAULT_PROVIDER_ID;
+  const preferredDefault = config?.defaultProviderId ?? DEFAULT_PROVIDER_ID;
+  const providerId = route?.providerId ?? resolveDefaultProviderId(hasCredential, preferredDefault);
   const adapter = requireProvider(providerId);
   return { capability, providerId, adapter, baseUrl: adapter.baseUrl, modelId: route?.modelId };
 }

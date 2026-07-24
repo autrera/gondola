@@ -6,6 +6,7 @@ import {
   assertAllowedCapabilityRoute,
   deriveCapabilityRoutes,
   detectAvailableCapabilities,
+  resolveDefaultProviderId,
 } from "./providers/registry";
 import { ALL_CAPABILITIES, type Capability, type ProviderModel } from "./providers/types";
 import { surplusAdapter } from "./providers/surplus-adapter";
@@ -99,4 +100,11 @@ test("the Surplus adapter exposes required properties and selects correct defaul
   assert.ok(grok?.capabilities.includes("vision"));
 
   assert.equal(surplusAdapter.selectDefaultChatModel(models), "glm-5.2");
+});
+
+test("resolveDefaultProviderId dynamically inspects configured credentials", () => {
+  assert.equal(resolveDefaultProviderId((id) => id === "venice"), "venice");
+  assert.equal(resolveDefaultProviderId((id) => id === "surplus"), "surplus");
+  assert.equal(resolveDefaultProviderId((id) => id === "surplus", "venice"), "surplus");
+  assert.equal(resolveDefaultProviderId(() => false, "venice"), "venice");
 });

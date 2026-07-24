@@ -11,6 +11,8 @@ interface ModelPickerProps {
   variant?: "header" | "composer";
   reasoningEffort?: ReasoningEffort;
   onReasoningEffortChange?: (effort: ReasoningEffort) => void;
+  activeProvider?: string;
+  providerId?: string;
 }
 
 interface OptionBadge {
@@ -70,6 +72,8 @@ export function ModelPicker({
   variant = "header",
   reasoningEffort = "medium",
   onReasoningEffortChange,
+  activeProvider,
+  providerId,
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
