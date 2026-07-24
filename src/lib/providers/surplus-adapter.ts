@@ -139,11 +139,11 @@ function deriveModelCapabilities(model: RawSurplusModel): Capability[] {
   caps.add("chat");
 
   // Map capabilities, traits, and features to Gondola capabilities
-  if (model.capabilities?.supportsVision || traitSet.has("vision") || featureSet.has("vision")) {
+  if (model.capabilities?.supportsVision ?? (traitSet.has("vision") || featureSet.has("vision"))) {
     caps.add("vision");
   }
 
-  if (model.capabilities?.supportsReasoning || traitSet.has("reasoning") || featureSet.has("reasoning")) {
+  if (model.capabilities?.supportsReasoning ?? (traitSet.has("reasoning") || featureSet.has("reasoning"))) {
     caps.add("reasoning");
   }
 
@@ -157,8 +157,8 @@ function deriveModelCapabilities(model: RawSurplusModel): Capability[] {
 function deriveModelType(model: RawSurplusModel): string {
   if (model.type) return model.type;
   const idLower = model.id.toLowerCase();
-  const features = model.supported_features ?? [];
-  const traits = model.traits ?? [];
+  const features = (model.supported_features ?? []).map((f: string) => f.toLowerCase());
+  const traits = (model.traits ?? []).map((t: string) => t.toLowerCase());
   if (idLower.includes("embed") || features.includes("embedding") || traits.includes("embedding")) return "embedding";
   return "text";
 }
@@ -192,7 +192,7 @@ function deriveSurplusCapabilitiesObject(model: RawSurplusModel): Record<string,
     supportsResponseSchema,
   };
 
-  const contextTokens = model.capabilities?.availableContextTokens ?? model.constraints?.contextTokens ?? model.context_length;
+  const contextTokens = model.constraints?.contextTokens ?? model.capabilities?.availableContextTokens ?? model.context_length;
   if (typeof contextTokens === "number" && contextTokens > 0) {
     capsObj.availableContextTokens = contextTokens;
   }
