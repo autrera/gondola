@@ -35,7 +35,7 @@ Or with Docker (for the web companion):
 
 ```bash
 docker build -t gondola .
-docker run -p 3000:3000 --env-file .env.local gondola
+docker run -p 3000:3000 -v $(pwd):/app -v /app/node_modules --env-file .env.local gondola
 ```
 
 ## Usage
@@ -60,7 +60,7 @@ Or with Docker:
 
 ```bash
 docker build -t gondola .
-docker run -p 3000:3000 --env-file .env.local gondola
+docker run -p 3000:3000 -v $(pwd):/app -v /app/node_modules --env-file .env.local gondola
 ```
 
 The provider key stays on the server and is never sent to the browser. `.env.example` documents the supported provider keys and two optional, server-only keys: `VENICE_ADMIN_KEY` (balance and usage analytics in the API X-ray) and `TELEGRAM_BOT_TOKEN` (the Telegram channel, which can also be set in the UI).
