@@ -59,7 +59,18 @@ export async function GET(request: Request) {
       name: model.name,
       beta: model.beta,
       privacy: model.privacy,
-      capabilities: model.capabilities,
+      capabilities: model.capabilitiesObject ?? (
+        Array.isArray(model.capabilities)
+          ? {
+              supportsFunctionCalling: model.type === "text",
+              supportsVision: model.capabilities.includes("vision"),
+              supportsReasoning: model.capabilities.includes("reasoning"),
+            }
+          : model.capabilities
+      ),
+      constraints: model.constraints,
+      pricing: model.pricing,
+      traits: model.traits,
       voices: model.voices,
       defaultVoice: model.defaultVoice,
     }));
