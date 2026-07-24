@@ -99,6 +99,16 @@ function providerInfo(providerId: string) {
   return { id: provider.id, name: provider.name, keyManagementUrl: provider.keyManagementUrl };
 }
 
+/**
+ * Resolve the active provider ID using this precedence:
+ * 1. Explicitly passed providerId, if given.
+ * 2. The provider recorded in setup.json, when the provider is registered and has a resolvable credential.
+ * 3. Dynamic credential check via resolveDefaultProviderId (prefers Venice, then any provider with a credential).
+ *
+ * This ensures that once a user verifies a non-default provider (e.g. Surplus),
+ * subsequent unparameterized calls to getSetupStatus / isSetupReady / verifySetup
+ * resolve to that provider rather than always defaulting to Venice.
+ */
 export function resolveActiveProviderId(providerId?: string): string {
   if (providerId) return providerId;
   const record = readSetupRecord();
