@@ -12,10 +12,23 @@ const SURPLUS_BASE_URL = "https://api.surplusintelligence.ai/v1";
 
 interface RawSurplusModel {
   id: string;
-  object?: string;
-  type?: string;
-  owned_by?: string;
-  capabilities?: string[];
+  name: string;
+  created: number;
+  description?: string;
+  context_length?: number;
+  architecture?: {
+    modality?: string;
+    input_modalities?: string[];
+    output_modalities?: string[];
+    tokenizer?: string;
+    instruct_type?: string | null;
+  };
+  pricing?: Record<string, string>;
+  top_provider?: Record<string, unknown>;
+  supported_parameters?: string[];
+  supported_features?: string[];
+  provider?: string;
+  per_request_limits?: unknown;
 }
 
 async function surplusRequestWithKey(
@@ -73,48 +86,60 @@ const CAPABILITY_MESSAGES: Record<NonNullable<CredentialValidation["reason"]>, s
   unknown: "Surplus Intelligence could not verify this key right now. Try again in a moment.",
 };
 
+/**
+ * Surplus reports many more features than gondola maps to capabilities.
+ * Only a subset correspond to firstmate Capability values.
+ */
 const SURPLUS_CAPABILITIES: Capability[] = ["chat", "reasoning", "vision", "embedding"];
 
+/**
+ * Map a model's supported_features to gondola capabilities.
+ * - All text/text->text models are chat-capable
+ * - "vision" feature → vision capability
+ * - "reasoning" feature → reasoning capability
+ * - "embedding" feature → embedding capability
+ */
 function deriveModelCapabilities(model: RawSurplusModel): Capability[] {
-  const id = model.id.toLowerCase();
-  const type = (model.type ?? "").toLowerCase();
+  const features = model.supported_features ?? [];
+  const featureSet = new Set(features.map((f: string) => f.toLowerCase()));
+  const idLower = model.id.toLowerCase();
   const caps = new Set<Capability>();
 
-  if (id.includes("embed") || type === "embedding") {
+  // Embedding models: id contains "embed" or features include "embedding"
+  if (idLower.includes("embed") || featureSet.has("embedding")) {
     caps.add("embedding");
     return [...caps];
   }
 
-  // Text/Chat models
+  // All text models get chat by default
   caps.add("chat");
 
-  if (id === "glm-5.2" || id === "deepseek-v4-flash" || id.includes("glm") || id.includes("deepseek") || id.includes("reasoning")) {
-    caps.add("reasoning");
-  }
-
-  if (id === "grok-4.5" || id.includes("grok") || id.includes("vision")) {
-    caps.add("vision");
-    caps.add("reasoning");
-  }
-
-  // Also respect raw capabilities if provided in catalog
-  if (Array.isArray(model.capabilities)) {
-    for (const c of model.capabilities) {
-      if (SURPLUS_CAPABILITIES.includes(c as Capability)) {
-        caps.add(c as Capability);
-      }
-    }
-  }
+  // Map supported features to capabilities
+  if (featureSet.has("vision")) caps.add("vision");
+  if (featureSet.has("reasoning")) caps.add("reasoning");
 
   return SURPLUS_CAPABILITIES.filter((c) => caps.has(c));
+}
+
+/**
+ * Derive gondola type from the surplus model's features.
+ * Embedding models → "embedding", everything else → "text" (matching how
+ * Venice types work — text models with vision features vs image models).
+ */
+function deriveModelType(model: RawSurplusModel): string {
+  const idLower = model.id.toLowerCase();
+  const features = model.supported_features ?? [];
+  if (idLower.includes("embed") || features.includes("embedding")) return "embedding";
+  return "text";
 }
 
 function toProviderModel(model: RawSurplusModel): ProviderModel {
   return {
     id: model.id,
-    type: model.type ?? (model.id.includes("embed") ? "embedding" : "chat"),
-    name: model.id,
+    type: deriveModelType(model),
+    name: model.name,
     capabilities: deriveModelCapabilities(model),
+    raw: model as unknown as Record<string, unknown>,
   };
 }
 
@@ -134,12 +159,14 @@ async function fetchCatalog(credential: ProviderCredential, signal?: AbortSignal
   const body = await response.json() as { data?: RawSurplusModel[] };
   const rawModels = Array.isArray(body.data) ? body.data : [];
 
-  // Fallback defaults if catalog is empty or missing expected models
+  // Safety net: hardcoded fallbacks for empty-catalog edge cases
+  // (e.g. network error that didn't throw, or an API that returned valid JSON with no models).
+  // The real API returns 346 models, so this should never be reached in normal operation.
   if (rawModels.length === 0) {
     return [
-      { id: "glm-5.2", type: "chat", name: "glm-5.2", capabilities: ["chat", "reasoning"] },
-      { id: "deepseek-v4-flash", type: "chat", name: "deepseek-v4-flash", capabilities: ["chat", "reasoning"] },
-      { id: "grok-4.5", type: "chat", name: "grok-4.5", capabilities: ["chat", "vision", "reasoning"] },
+      { id: "glm-5.2", type: "text", name: "GLM 5.2", capabilities: ["chat", "reasoning"] },
+      { id: "deepseek-v4-flash", type: "text", name: "DeepSeek V4 Flash", capabilities: ["chat", "reasoning"] },
+      { id: "grok-4.5", type: "text", name: "Grok 4.5", capabilities: ["chat", "vision", "reasoning"] },
     ];
   }
 
