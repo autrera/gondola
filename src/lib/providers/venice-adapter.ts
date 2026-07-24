@@ -117,11 +117,20 @@ function deriveModelCapabilities(model: RawVeniceModel): Capability[] {
 
 function toProviderModel(model: RawVeniceModel): ProviderModel {
   const spec = model.model_spec ?? {};
+  const capsObj = spec.capabilities ?? {
+    supportsFunctionCalling: model.type === "text" || model.type === "chat" || model.type === "llm",
+    supportsVision: deriveModelCapabilities(model).includes("vision"),
+    supportsReasoning: deriveModelCapabilities(model).includes("reasoning"),
+  };
   return {
     id: model.id,
     type: model.type,
     name: spec.name ?? model.id,
     capabilities: deriveModelCapabilities(model),
+    capabilitiesObject: capsObj,
+    constraints: spec.constraints,
+    pricing: spec.pricing,
+    traits: spec.traits,
     beta: spec.beta,
     privacy: spec.privacy,
     voices: spec.voices,

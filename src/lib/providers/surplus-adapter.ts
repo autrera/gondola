@@ -133,12 +133,55 @@ function deriveModelType(model: RawSurplusModel): string {
   return "text";
 }
 
+function deriveSurplusCapabilitiesObject(model: RawSurplusModel): Record<string, boolean | number | string | string[]> {
+  const features = model.supported_features ?? [];
+  const featureSet = new Set(features.map((f: string) => f.toLowerCase()));
+  const params = model.supported_parameters ?? [];
+  const paramSet = new Set(params.map((p: string) => p.toLowerCase()));
+  const inputModalities = (model.architecture?.input_modalities ?? []).map((m: string) => m.toLowerCase());
+  const type = deriveModelType(model);
+  const isText = type === "text";
+
+  const supportsFunctionCalling = isText;
+
+  const supportsVision = featureSet.has("vision") || inputModalities.includes("image");
+  const supportsReasoning = featureSet.has("reasoning") || featureSet.has("thinking");
+  const supportsReasoningEffort = supportsReasoning || featureSet.has("reasoning_effort") || featureSet.has("reasoning-effort");
+  const supportsVideo = featureSet.has("video") || inputModalities.includes("video");
+  const supportsResponseSchema = featureSet.has("structured_outputs") || featureSet.has("response_format") || paramSet.has("response_format");
+
+  const capsObj: Record<string, boolean | number | string | string[]> = {
+    supportsFunctionCalling,
+    supportsVision,
+    supportsReasoning,
+    supportsReasoningEffort,
+    supportsVideo,
+    supportsVideoInput: supportsVideo,
+    supportsResponseSchema,
+  };
+
+  if (typeof model.context_length === "number" && model.context_length > 0) {
+    capsObj.availableContextTokens = model.context_length;
+  }
+
+  return capsObj;
+}
+
 function toProviderModel(model: RawSurplusModel): ProviderModel {
+  const name = model.name ?? model.id;
+  const idLower = model.id.toLowerCase();
+  const nameLower = name.toLowerCase();
   return {
     id: model.id,
     type: deriveModelType(model),
-    name: model.name,
+    name,
     capabilities: deriveModelCapabilities(model),
+    capabilitiesObject: deriveSurplusCapabilitiesObject(model),
+    constraints: model.context_length ? { contextTokens: model.context_length } : undefined,
+    pricing: model.pricing,
+    traits: model.supported_features,
+    beta: idLower.includes("beta") || nameLower.includes("beta"),
+    privacy: "private",
     raw: model as unknown as Record<string, unknown>,
   };
 }
@@ -164,9 +207,9 @@ async function fetchCatalog(credential: ProviderCredential, signal?: AbortSignal
   // The real API returns 346 models, so this should never be reached in normal operation.
   if (rawModels.length === 0) {
     return [
-      { id: "glm-5.2", type: "text", name: "GLM 5.2", capabilities: ["chat", "reasoning"] },
-      { id: "deepseek-v4-flash", type: "text", name: "DeepSeek V4 Flash", capabilities: ["chat", "reasoning"] },
-      { id: "grok-4.5", type: "text", name: "Grok 4.5", capabilities: ["chat", "vision", "reasoning"] },
+      { id: "glm-5.2", type: "text", name: "GLM 5.2", capabilities: ["chat", "reasoning"], capabilitiesObject: { supportsFunctionCalling: true, supportsReasoning: true, supportsReasoningEffort: true }, privacy: "private" },
+      { id: "deepseek-v4-flash", type: "text", name: "DeepSeek V4 Flash", capabilities: ["chat", "reasoning"], capabilitiesObject: { supportsFunctionCalling: true, supportsReasoning: true, supportsReasoningEffort: true }, privacy: "private" },
+      { id: "grok-4.5", type: "text", name: "Grok 4.5", capabilities: ["chat", "vision", "reasoning"], capabilitiesObject: { supportsFunctionCalling: true, supportsVision: true, supportsReasoning: true, supportsReasoningEffort: true }, privacy: "private" },
     ];
   }
 

@@ -97,10 +97,14 @@ test("the Surplus adapter exposes required properties and selects correct defaul
   assert.equal(glm?.type, "text");
   assert.ok(glm?.capabilities.includes("chat"));
   assert.ok(glm?.capabilities.includes("reasoning"));
+  assert.equal(glm?.capabilitiesObject?.supportsFunctionCalling, true);
+  assert.equal(glm?.capabilitiesObject?.supportsReasoning, true);
 
   const grok = models.find((m) => m.id === "grok-4.5");
   assert.equal(grok?.name, "Grok 4.5");
   assert.ok(grok?.capabilities.includes("vision"));
+  assert.equal(grok?.capabilitiesObject?.supportsFunctionCalling, true);
+  assert.equal(grok?.capabilitiesObject?.supportsVision, true);
 
   // Verify the raw response is stored
   assert.ok(glm?.raw);

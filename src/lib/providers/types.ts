@@ -75,6 +75,10 @@ export interface ProviderModel {
   type: string;
   name: string;
   capabilities: Capability[];
+  capabilitiesObject?: Record<string, boolean | number | string | string[]>;
+  constraints?: Record<string, unknown>;
+  pricing?: Record<string, unknown>;
+  traits?: string[];
   beta?: boolean;
   privacy?: string;
   voices?: string[];
