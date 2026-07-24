@@ -1,0 +1,33 @@
+node_modules
+.next
+.git
+.gitignore
+Dockerfile*
+.dockerignore
+npm-debug.log*
+
+# Environment and secrets
+.env
+.env*.local
+.env.production
+.env.development
+*.pem
+*.key
+*.p12
+
+# Gondola runtime data and logs
+.gondola
+.nova
+MEMORIES.md
+PLAN.md
+*.conversation.jsonl
+*.transcript.jsonl
+*.log
+
+# OS and editor files
+.DS_Store
+.idea
+.vscode
+
+# Build output
+*.tsbuildinfo

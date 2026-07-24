@@ -22,13 +22,20 @@ Underneath both loops is an operational self-awareness layer. The agent reads it
 
 ## Install
 
-Requirements: Node.js 20+ and a Venice inference API key.
+Requirements: Docker (optional), Node.js 20+ and a Venice inference API key.
 
 ```bash
 git clone https://github.com/sabrinaaquino/gondola.git
 cd gondola
 npm install --ignore-scripts
 cp .env.example .env.local   # then add your VENICE_API_KEY
+```
+
+Or with Docker (for the web companion):
+
+```bash
+docker build -t gondola .
+docker run -p 3000:3000 --env-file .env.local gondola
 ```
 
 ## Usage
@@ -47,6 +54,13 @@ Web companion:
 
 ```bash
 npm run dev        # then open the local URL it prints
+```
+
+Or with Docker:
+
+```bash
+docker build -t gondola .
+docker run -p 3000:3000 --env-file .env.local gondola
 ```
 
 The Venice key stays on the server and is never sent to the browser. `.env.example` documents two optional, server-only keys: `VENICE_ADMIN_KEY` (balance and usage analytics in the API X-ray) and `TELEGRAM_BOT_TOKEN` (the Telegram channel, which can also be set in the UI).
