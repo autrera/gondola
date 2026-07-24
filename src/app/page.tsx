@@ -836,7 +836,7 @@ function TaskProgressCard({
   );
 }
 
-function Workspace() {
+function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [action, setAction] = useState<AvatarAction>("neutral");
@@ -890,6 +890,7 @@ function Workspace() {
   const [labOpen, setLabOpen] = useState(false);
   const [settings, setSettings] = useState<AgentSettings>(DEFAULT_SETTINGS);
   const [models, setModels] = useState<CatalogModel[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string | undefined>(initialProviderId);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState("");
 
@@ -1258,15 +1259,17 @@ function Workspace() {
       }
     }
 
-    void fetch("/api/models")
+    const providerParam = activeProviderId ? `?provider=${encodeURIComponent(activeProviderId)}` : "";
+    void fetch(`/api/models${providerParam}`)
       .then(async (response) => {
-        const body = (await response.json()) as { connected?: boolean; models?: CatalogModel[]; error?: string };
-        if (!response.ok) throw new Error(body.error ?? "Could not connect to Venice");
+        const body = (await response.json()) as { connected?: boolean; providerId?: string; models?: CatalogModel[]; error?: string };
+        if (!response.ok) throw new Error(body.error ?? "Could not connect to provider");
         setModels(body.models ?? []);
         setConnected(Boolean(body.connected));
+        if (body.providerId) setActiveProviderId(body.providerId);
       })
       .catch((error: unknown) => {
-        setConnectionError(error instanceof Error ? error.message : "Could not connect to Venice");
+        setConnectionError(error instanceof Error ? error.message : "Could not connect to provider");
       });
 
     void (async () => {
@@ -4572,6 +4575,7 @@ function Workspace() {
                   reasoningEffort={settings.reasoningEffort}
                   onReasoningEffortChange={changeReasoningEffort}
                   disabled={generating}
+                  activeProvider={activeProviderId}
                 />
               </div>
               <div className="composer-actions">
@@ -4734,7 +4738,7 @@ function OnboardingGate() {
   if (!ready) {
     return <Onboarding initialStatus={status} onReady={() => setReady(true)} />;
   }
-  return <Workspace />;
+  return <Workspace initialProviderId={status?.providerId} />;
 }
 
 export default function Home() {

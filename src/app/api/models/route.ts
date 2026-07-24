@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveCredential } from "@/lib/credential-store";
-import { requireProvider, resolveCapabilityRoute } from "@/lib/providers/registry";
+import { requireProvider, resolveCapabilityRoute, resolveDefaultProviderId } from "@/lib/providers/registry";
 import { rejectUntrustedLocalRequest } from "@/lib/request-security";
 import { toPublicError } from "@/lib/venice";
 
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
   if (rejected) return rejected;
 
   const url = new URL(request.url);
-  const providerId = url.searchParams.get("provider") || url.searchParams.get("providerId") || resolveCapabilityRoute("chat").providerId;
+  const providerId = url.searchParams.get("provider") || url.searchParams.get("providerId") || resolveDefaultProviderId((id) => Boolean(resolveCredential(id)));
 
   if (!catalogCache.__providerModelCatalog) {
     catalogCache.__providerModelCatalog = {};
