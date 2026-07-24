@@ -23,10 +23,10 @@ const CATALOG: ProviderModel[] = [
 ];
 
 const SURPLUS_CATALOG: ProviderModel[] = [
-  { id: "glm-5.2", type: "chat", name: "glm-5.2", capabilities: ["chat", "reasoning"] },
-  { id: "deepseek-v4-flash", type: "chat", name: "deepseek-v4-flash", capabilities: ["chat", "reasoning"] },
-  { id: "grok-4.5", type: "chat", name: "grok-4.5", capabilities: ["chat", "vision", "reasoning"] },
-  { id: "surplus-embed-v1", type: "embedding", name: "surplus-embed-v1", capabilities: ["embedding"] },
+  { id: "glm-5.2", type: "text", name: "GLM 5.2", capabilities: ["chat", "reasoning"] },
+  { id: "deepseek-v4-flash", type: "text", name: "DeepSeek V4 Flash", capabilities: ["chat", "reasoning"] },
+  { id: "grok-4.5", type: "text", name: "Grok 4.5", capabilities: ["chat", "vision", "reasoning"] },
+  { id: "surplus-embed-v1", type: "embedding", name: "Surplus Embeddings 1", capabilities: ["embedding"] },
 ];
 
 const originalFetch = globalThis.fetch;
@@ -83,9 +83,9 @@ test("the Surplus adapter exposes required properties and selects correct defaul
 
   globalThis.fetch = (async () => new Response(JSON.stringify({
     data: [
-      { id: "glm-5.2" },
-      { id: "deepseek-v4-flash" },
-      { id: "grok-4.5" },
+      { id: "glm-5.2", name: "GLM 5.2", supported_features: ["streaming", "reasoning"] },
+      { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", supported_features: ["streaming", "reasoning"] },
+      { id: "grok-4.5", name: "Grok 4.5", supported_features: ["streaming", "tools", "vision", "reasoning"] },
     ],
   }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
 
@@ -93,11 +93,18 @@ test("the Surplus adapter exposes required properties and selects correct defaul
   assert.equal(models.length, 3);
 
   const glm = models.find((m) => m.id === "glm-5.2");
+  assert.equal(glm?.name, "GLM 5.2");
+  assert.equal(glm?.type, "text");
   assert.ok(glm?.capabilities.includes("chat"));
   assert.ok(glm?.capabilities.includes("reasoning"));
 
   const grok = models.find((m) => m.id === "grok-4.5");
+  assert.equal(grok?.name, "Grok 4.5");
   assert.ok(grok?.capabilities.includes("vision"));
+
+  // Verify the raw response is stored
+  assert.ok(glm?.raw);
+  assert.equal((glm?.raw as Record<string, unknown>)?.name, "GLM 5.2");
 
   assert.equal(surplusAdapter.selectDefaultChatModel(models), "glm-5.2");
 });
