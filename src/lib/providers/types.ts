@@ -1,10 +1,9 @@
 // Provider foundation (Phase 1).
 //
-// Gondola V1 ships Venice as the only bundled full-capability provider, but all
-// provider-aware code resolves through this registry + capability routes so that
-// future providers can override individual capabilities WITHOUT scattering
-// provider conditionals across the app. Do not branch on `providerId` outside
-// the registry — add an adapter and a route instead.
+// All provider-aware code resolves through the registry + capability routes so
+// that providers can serve individual capabilities WITHOUT scattering provider
+// conditionals across the app. Do not branch on `providerId` outside the
+// registry — add an adapter and a route instead.
 
 export type Capability =
   | "chat"
@@ -76,6 +75,10 @@ export interface ProviderModel {
   type: string;
   name: string;
   capabilities: Capability[];
+  capabilitiesObject?: Record<string, boolean | number | string | string[]>;
+  constraints?: Record<string, unknown>;
+  pricing?: Record<string, unknown>;
+  traits?: string[];
   beta?: boolean;
   privacy?: string;
   voices?: string[];
@@ -132,7 +135,7 @@ export interface CapabilityRoute {
  * embedding a secret.
  */
 export interface ProviderConfiguration {
-  defaultProviderId: "venice";
+  defaultProviderId: string;
   providers: Record<string, {
     enabled: boolean;
     credentialRef?: string;

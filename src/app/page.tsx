@@ -836,7 +836,7 @@ function TaskProgressCard({
   );
 }
 
-function Workspace() {
+function Workspace({ initialProviderId }: { initialProviderId?: string } = {}) {
   const [sessionId, setSessionId] = useState("");
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [action, setAction] = useState<AvatarAction>("neutral");
@@ -890,6 +890,7 @@ function Workspace() {
   const [labOpen, setLabOpen] = useState(false);
   const [settings, setSettings] = useState<AgentSettings>(DEFAULT_SETTINGS);
   const [models, setModels] = useState<CatalogModel[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string | undefined>(initialProviderId);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState("");
 
@@ -1239,8 +1240,10 @@ function Workspace() {
           }
         }
         if (!localStorage.getItem("nova-fast-voice-v1")) {
-          migrated.ttsModel = "tts-xai-v1";
-          migrated.voice = "rex";
+          if (!parsed.ttsModel) {
+            migrated.ttsModel = "tts-xai-v1";
+            migrated.voice = "rex";
+          }
           localStorage.setItem("nova-fast-voice-v1", "1");
         }
         if (!localStorage.getItem("nova-fluent-voice-v1")) {
@@ -1248,8 +1251,8 @@ function Workspace() {
           localStorage.setItem("nova-fluent-voice-v1", "1");
         }
         if (!localStorage.getItem("nova-smart-fast-models-v2")) {
-          migrated.chatModel = DEFAULT_SETTINGS.chatModel;
-          migrated.visionModel = DEFAULT_SETTINGS.visionModel;
+          if (!parsed.chatModel) migrated.chatModel = DEFAULT_SETTINGS.chatModel;
+          if (!parsed.visionModel) migrated.visionModel = DEFAULT_SETTINGS.visionModel;
           localStorage.setItem("nova-smart-fast-models-v2", "1");
         }
         setSettings(migrated);
@@ -1258,15 +1261,71 @@ function Workspace() {
       }
     }
 
-    void fetch("/api/models")
+    const providerParam = activeProviderId ? `?provider=${encodeURIComponent(activeProviderId)}` : "";
+    void fetch(`/api/models${providerParam}`)
       .then(async (response) => {
-        const body = (await response.json()) as { connected?: boolean; models?: CatalogModel[]; error?: string };
-        if (!response.ok) throw new Error(body.error ?? "Could not connect to Venice");
-        setModels(body.models ?? []);
+        const body = (await response.json()) as { connected?: boolean; providerId?: string; models?: CatalogModel[]; error?: string };
+        if (!response.ok) throw new Error(body.error ?? "Could not connect to provider");
+        const loadedModels = body.models ?? [];
+        setModels(loadedModels);
         setConnected(Boolean(body.connected));
+        if (body.providerId) setActiveProviderId(body.providerId);
+
+        if (loadedModels.length > 0) {
+          setSettings((current) => {
+            const isText = (m: CatalogModel) => m.type === "text" || m.type === "chat" || m.type === "llm";
+            const chatCandidates = loadedModels.filter((m) => isText(m) && m.capabilities?.supportsFunctionCalling === true);
+            const visionCandidates = loadedModels.filter((m) => isText(m) && m.capabilities?.supportsVision === true);
+            const ttsCandidates = loadedModels.filter((m) => m.type === "tts" || m.type === "speech");
+            const sttCandidates = loadedModels.filter((m) => m.type === "stt" || m.type === "asr");
+            const imageCandidates = loadedModels.filter((m) => m.type === "image");
+            const videoCandidates = loadedModels.filter((m) => m.type === "video");
+            const musicCandidates = loadedModels.filter((m) => m.type === "music");
+
+            const pickModel = (currentId: string, candidates: CatalogModel[], preferredIds: string[] = []): string => {
+              if (candidates.some((m) => m.id === currentId)) return currentId;
+              for (const pref of preferredIds) {
+                const found = candidates.find((m) => m.id === pref);
+                if (found) return found.id;
+              }
+              return candidates[0]?.id ?? currentId;
+            };
+
+            const nextChatModel = pickModel(current.chatModel, chatCandidates, ["glm-5.2", "deepseek-v4-flash", "zai-org-glm-5-2"]);
+            const nextVisionModel = pickModel(current.visionModel, visionCandidates, ["grok-4.5", "claude-opus-4.5", "qwen3-6-27b"]);
+            const nextTtsModel = pickModel(current.ttsModel, ttsCandidates, ["tts-xai-v1", "venice-kokoro-tts"]);
+            const nextSttModel = pickModel(current.sttModel, sttCandidates, ["stt-xai-v1", "venice-whisper-large-v3"]);
+            const nextImageModel = pickModel(current.imageModel, imageCandidates, ["gpt-5.4-image-2", "z-image-turbo"]);
+            const nextVideoModel = pickModel(current.videoModel, videoCandidates, ["wan-2-7-text-to-video", "venice-runway-gen4-5-text"]);
+            const nextMusicModel = pickModel(current.musicModel, musicCandidates, ["venice-ace-step-15", "ace-step-15"]);
+
+            if (
+              nextChatModel === current.chatModel &&
+              nextVisionModel === current.visionModel &&
+              nextTtsModel === current.ttsModel &&
+              nextSttModel === current.sttModel &&
+              nextImageModel === current.imageModel &&
+              nextVideoModel === current.videoModel &&
+              nextMusicModel === current.musicModel
+            ) {
+              return current;
+            }
+
+            return {
+              ...current,
+              chatModel: nextChatModel,
+              visionModel: nextVisionModel,
+              ttsModel: nextTtsModel,
+              sttModel: nextSttModel,
+              imageModel: nextImageModel,
+              videoModel: nextVideoModel,
+              musicModel: nextMusicModel,
+            };
+          });
+        }
       })
       .catch((error: unknown) => {
-        setConnectionError(error instanceof Error ? error.message : "Could not connect to Venice");
+        setConnectionError(error instanceof Error ? error.message : "Could not connect to provider");
       });
 
     void (async () => {
@@ -1333,7 +1392,21 @@ function Workspace() {
 
   useEffect(() => {
     localStorage.setItem("nova-settings", JSON.stringify(settings));
-  }, [settings]);
+    const selectedModels = {
+      chat: settings.chatModel,
+      vision: settings.visionModel,
+      speech: settings.ttsModel,
+      transcription: settings.sttModel,
+      image: settings.imageModel,
+      video: settings.videoModel,
+      music: settings.musicModel,
+    };
+    void fetch("/api/setup/routes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: activeProviderId, selectedModels }),
+    }).catch(() => undefined);
+  }, [settings, activeProviderId]);
 
   const introFiredRef = useRef(false);
 
@@ -4572,6 +4645,7 @@ function Workspace() {
                   reasoningEffort={settings.reasoningEffort}
                   onReasoningEffortChange={changeReasoningEffort}
                   disabled={generating}
+                  activeProvider={activeProviderId}
                 />
               </div>
               <div className="composer-actions">
@@ -4734,7 +4808,7 @@ function OnboardingGate() {
   if (!ready) {
     return <Onboarding initialStatus={status} onReady={() => setReady(true)} />;
   }
-  return <Workspace />;
+  return <Workspace initialProviderId={status?.providerId} />;
 }
 
 export default function Home() {

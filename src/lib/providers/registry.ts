@@ -1,4 +1,6 @@
 import { DEFAULT_SETTINGS } from "../app-types";
+import { resolveCredential } from "../credential-store";
+import { surplusAdapter } from "./surplus-adapter";
 import { veniceAdapter } from "./venice-adapter";
 import {
   ALL_CAPABILITIES,
@@ -9,14 +11,27 @@ import {
   type ProviderModel,
 } from "./types";
 
-// The single source of provider adapters. V1 registers only Venice. Adding a
-// provider later means registering an adapter here + adding capability routes —
-// never sprinkling `if (providerId === ...)` across the app.
+// The single source of provider adapters.
 const ADAPTERS: Record<string, ProviderAdapter> = {
   [veniceAdapter.id]: veniceAdapter,
+  [surplusAdapter.id]: surplusAdapter,
 };
 
 export const DEFAULT_PROVIDER_ID = "venice" as const;
+
+export function resolveDefaultProviderId(
+  hasCredential?: (providerId: string) => boolean,
+  preferredId: string = DEFAULT_PROVIDER_ID,
+): string {
+  const checkCredential = hasCredential ?? ((id: string) => Boolean(resolveCredential(id)));
+  if (checkCredential(preferredId)) return preferredId;
+  for (const provider of listProviders()) {
+    if (checkCredential(provider.id)) {
+      return provider.id;
+    }
+  }
+  return preferredId;
+}
 
 export function listProviders(): ProviderAdapter[] {
   return Object.values(ADAPTERS);
@@ -89,10 +104,35 @@ const PREFERRED_DEFAULTS: Partial<Record<Capability, string>> = {
   music: DEFAULT_SETTINGS.musicModel,
 };
 
-function pickModel(models: ProviderModel[], capability: Capability): ProviderModel | undefined {
+const SURPLUS_PREFERRED_DEFAULTS: Partial<Record<Capability, string>> = {
+  chat: "glm-5.2",
+  vision: "grok-4.5",
+  reasoning: "glm-5.2",
+  speech: "venice-kokoro-tts",
+  transcription: "venice-whisper-large-v3",
+  image: "gpt-5.4-image-2",
+  video: "venice-runway-gen4-5-text",
+  music: "venice-ace-step-15",
+};
+
+function pickModel(
+  models: ProviderModel[],
+  capability: Capability,
+  providerId?: string,
+  selectedModels?: Partial<Record<Capability, string>>,
+): ProviderModel | undefined {
   const candidates = modelsForCapability(models, capability);
   if (!candidates.length) return undefined;
-  const preferredId = capability === "search" ? DEFAULT_SETTINGS.chatModel : PREFERRED_DEFAULTS[capability];
+
+  const userSelectedId = selectedModels?.[capability];
+  if (userSelectedId) {
+    const userSelected = candidates.find((model) => model.id === userSelectedId);
+    if (userSelected) return userSelected;
+  }
+
+  const preferredId = providerId === "surplus"
+    ? SURPLUS_PREFERRED_DEFAULTS[capability]
+    : (capability === "search" ? (selectedModels?.chat ?? DEFAULT_SETTINGS.chatModel) : PREFERRED_DEFAULTS[capability]);
   if (preferredId) {
     const preferred = candidates.find((model) => model.id === preferredId);
     if (preferred) return preferred;
@@ -111,11 +151,12 @@ function pickModel(models: ProviderModel[], capability: Capability): ProviderMod
 export function deriveCapabilityRoutes(
   models: ProviderModel[],
   providerId: string = DEFAULT_PROVIDER_ID,
+  selectedModels?: Partial<Record<Capability, string>>,
 ): Partial<Record<Capability, CapabilityRoute>> {
   const provider = requireProvider(providerId);
   const routes: Partial<Record<Capability, CapabilityRoute>> = {};
   for (const capability of provider.capabilities) {
-    const primary = pickModel(models, capability);
+    const primary = pickModel(models, capability, providerId, selectedModels);
     if (!primary) continue;
     const fallbacks = modelsForCapability(models, capability)
       .filter((model) => model.id !== primary.id)
@@ -133,7 +174,7 @@ export function deriveCapabilityRoutes(
   return routes;
 }
 
-/** A fresh, Venice-only provider configuration (no routes until discovery runs). */
+/** A fresh default provider configuration with Venice as default (no routes until discovery runs). */
 export function defaultProviderConfiguration(): ProviderConfiguration {
   return {
     defaultProviderId: DEFAULT_PROVIDER_ID,
@@ -153,14 +194,19 @@ export interface ResolvedRoute {
 }
 
 /**
- * Resolve the runtime provider + base URL for a capability. V1 always resolves
- * to Venice, but the runtime reads its base URL (and, later, model/provider)
- * from here so a future capability-specific override is a real code path, not
- * just settings metadata. Falls back to the default provider when unrouted.
+ * Resolve the runtime provider + base URL for a capability. The runtime reads
+ * its base URL and model/provider from here so a capability-specific override
+ * is a real code path, not just settings metadata.
+ * Falls back to the default provider when unrouted.
  */
-export function resolveCapabilityRoute(capability: Capability, config?: ProviderConfiguration): ResolvedRoute {
+export function resolveCapabilityRoute(
+  capability: Capability,
+  config?: ProviderConfiguration,
+  hasCredential?: (providerId: string) => boolean,
+): ResolvedRoute {
   const route = config?.routes?.[capability];
-  const providerId = route?.providerId ?? DEFAULT_PROVIDER_ID;
+  const preferredDefault = config?.defaultProviderId ?? DEFAULT_PROVIDER_ID;
+  const providerId = route?.providerId ?? resolveDefaultProviderId(hasCredential, preferredDefault);
   const adapter = requireProvider(providerId);
   return { capability, providerId, adapter, baseUrl: adapter.baseUrl, modelId: route?.modelId };
 }

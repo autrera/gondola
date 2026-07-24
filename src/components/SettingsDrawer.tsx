@@ -90,15 +90,15 @@ export function SettingsDrawer({
   }, [open, onClose]);
 
   const groups = useMemo(() => {
-    const byType = (type: string) => models.filter((model) => model.type === type);
+    const isText = (m: CatalogModel) => m.type === "text" || m.type === "chat" || m.type === "llm";
     return {
-      chat: byType("text").filter((model) => model.capabilities?.supportsFunctionCalling === true),
-      vision: byType("text").filter((model) => model.capabilities?.supportsVision === true),
-      tts: byType("tts"),
-      asr: byType("asr"),
-      image: byType("image").filter((model) => model.id !== "bria-bg-remover"),
-      video: byType("video").filter((model) => model.constraints?.model_type === "text-to-video"),
-      music: byType("music"),
+      chat: models.filter((model) => isText(model) && model.capabilities?.supportsFunctionCalling === true),
+      vision: models.filter((model) => isText(model) && model.capabilities?.supportsVision === true),
+      tts: models.filter((model) => model.type === "tts" || model.type === "speech"),
+      asr: models.filter((model) => model.type === "stt" || model.type === "asr"),
+      image: models.filter((model) => model.type === "image" && model.id !== "bria-bg-remover"),
+      video: models.filter((model) => model.type === "video"),
+      music: models.filter((model) => model.type === "music"),
     };
   }, [models]);
 

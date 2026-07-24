@@ -13,33 +13,20 @@ import {
   DEFAULT_PROVIDER_ID,
   deriveCapabilityRoutes,
   detectAvailableCapabilities,
+  getProvider,
   requireProvider,
+  resolveDefaultProviderId,
 } from "./providers/registry";
 import { ProviderError } from "./providers/types";
 import type { Capability, CapabilityRoute, ProviderErrorReason, ProviderModel } from "./providers/types";
 
-// SERVER-ONLY. The single first-run authority shared by the web app and the CLI.
-// A setup is "ready" ONLY after a live catalog request succeeds, a minimal real
-// chat completion succeeds, a default conversation model is chosen, and
-// capability defaults are derived. The presence of a key string is never enough.
+// ...
 
-export type SetupState =
-  | "not_configured"
-  | "credential_detected"
-  | "verifying"
-  | "invalid_credential"
-  | "inference_failed"
-  | "unreachable"
-  | "ready"
-  | "repair_required";
-
-// User-facing, sanitized copy per failure reason. Keeps an outage ("unreachable")
-// from being reported as a rejected key.
 const CATALOG_FAILURE_MESSAGES: Record<ProviderErrorReason, string> = {
-  invalid_credential: "Venice rejected this key. Check that you copied the full inference key.",
-  no_credits: "This Venice key has no available credits. Add credits, then verify again.",
-  unreachable: "Gondola couldn't reach Venice. Check your connection and try again.",
-  unknown: "Venice could not verify this key right now. Try again in a moment.",
+  invalid_credential: "The provider rejected this key. Check that you copied the correct API key.",
+  no_credits: "This key has no available credits. Add credits, then verify again.",
+  unreachable: "Gondola could not reach the provider. Check your connection and try again.",
+  unknown: "The provider could not verify this key right now. Try again in a moment.",
 };
 
 interface SetupRecord {
@@ -52,6 +39,16 @@ interface SetupRecord {
   capabilities: Record<Capability, boolean>;
   routes: Partial<Record<Capability, CapabilityRoute>>;
 }
+
+export type SetupState =
+  | "not_configured"
+  | "credential_detected"
+  | "verifying"
+  | "invalid_credential"
+  | "inference_failed"
+  | "unreachable"
+  | "ready"
+  | "repair_required";
 
 export interface SetupStatus {
   state: SetupState;
@@ -103,19 +100,39 @@ function providerInfo(providerId: string) {
 }
 
 /**
+ * Resolve the active provider ID using this precedence:
+ * 1. Explicitly passed providerId, if given.
+ * 2. The provider recorded in setup.json, when the provider is registered and has a resolvable credential.
+ * 3. Dynamic credential check via resolveDefaultProviderId (prefers Venice, then any provider with a credential).
+ *
+ * This ensures that once a user verifies a non-default provider (e.g. Surplus),
+ * subsequent unparameterized calls to getSetupStatus / isSetupReady / verifySetup
+ * resolve to that provider rather than always defaulting to Venice.
+ */
+export function resolveActiveProviderId(providerId?: string): string {
+  if (providerId) return providerId;
+  const record = readSetupRecord();
+  if (record?.providerId && getProvider(record.providerId) && resolveCredential(record.providerId)) {
+    return record.providerId;
+  }
+  return resolveDefaultProviderId();
+}
+
+/**
  * Steady-state setup status derived from the persisted verification + the
  * currently resolved credential. Does not perform network calls.
  */
-export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupStatus {
-  const credential = getCredentialStatus(providerId);
-  const provider = providerInfo(providerId);
-  const base: SetupStatus = { state: "not_configured", providerId, provider, credential };
+export function getSetupStatus(providerId?: string): SetupStatus {
+  const activeProviderId = resolveActiveProviderId(providerId);
+  const credential = getCredentialStatus(activeProviderId);
+  const provider = providerInfo(activeProviderId);
+  const base: SetupStatus = { state: "not_configured", providerId: activeProviderId, provider, credential };
 
-  const resolved = resolveCredential(providerId);
+  const resolved = resolveCredential(activeProviderId);
   if (!resolved) return base;
 
   const record = readSetupRecord();
-  if (!record || record.providerId !== providerId) {
+  if (!record || record.providerId !== activeProviderId) {
     return { ...base, state: "credential_detected" };
   }
   // Compare a non-reversible fingerprint of the full key, not the display suffix:
@@ -127,17 +144,51 @@ export function getSetupStatus(providerId: string = DEFAULT_PROVIDER_ID): SetupS
       message: "The active credential changed since it was last verified. Re-verify to continue.",
     };
   }
+
+  const capabilities = { ...record.capabilities };
+  const adapterCapabilities = requireProvider(activeProviderId).capabilities;
+  if (record.routes) {
+    for (const [cap, route] of Object.entries(record.routes)) {
+      if (route?.modelId && adapterCapabilities.includes(cap as Capability)) {
+        capabilities[cap as Capability] = true;
+      }
+    }
+  }
+
   return {
     ...base,
     state: "ready",
     verifiedAt: record.verifiedAt,
     defaultChatModel: record.defaultChatModel,
-    capabilities: record.capabilities,
+    capabilities,
     routes: record.routes,
   };
 }
 
-export function isSetupReady(providerId: string = DEFAULT_PROVIDER_ID): boolean {
+export function saveCapabilityRoutes(
+  newRoutes: Partial<Record<Capability, CapabilityRoute>>,
+  providerId?: string,
+): SetupStatus {
+  const activeProviderId = resolveActiveProviderId(providerId);
+  const record = readSetupRecord();
+  if (record && record.providerId === activeProviderId) {
+    const mergedRoutes = { ...record.routes, ...newRoutes };
+    const mergedCapabilities = { ...record.capabilities };
+    for (const [cap, route] of Object.entries(mergedRoutes)) {
+      if (route?.modelId) {
+        mergedCapabilities[cap as Capability] = true;
+      }
+    }
+    writeSetupRecord({
+      ...record,
+      routes: mergedRoutes,
+      capabilities: mergedCapabilities,
+    });
+  }
+  return getSetupStatus(activeProviderId);
+}
+
+export function isSetupReady(providerId?: string): boolean {
   return getSetupStatus(providerId).state === "ready";
 }
 
@@ -147,6 +198,7 @@ export interface VerifyOptions {
   apiKey?: string;
   /** When persisting a candidate key, make it override an env credential. */
   override?: boolean;
+  selectedModels?: Partial<Record<Capability, string>>;
   signal?: AbortSignal;
 }
 
@@ -156,7 +208,7 @@ export interface VerifyOptions {
  * move setup to "ready". Nothing is persisted unless every check passes.
  */
 export async function verifySetup(options: VerifyOptions = {}): Promise<SetupStatus> {
-  const providerId = options.providerId ?? DEFAULT_PROVIDER_ID;
+  const providerId = options.providerId ?? resolveActiveProviderId();
   const provider = requireProvider(providerId);
   const info = providerInfo(providerId);
 
@@ -189,7 +241,7 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
       provider: info,
       credential: getCredentialStatus(providerId),
       reason,
-      message: CATALOG_FAILURE_MESSAGES[reason],
+      message: (error instanceof ProviderError ? error.message : undefined) ?? CATALOG_FAILURE_MESSAGES[reason],
     };
   }
 
@@ -215,13 +267,13 @@ export async function verifySetup(options: VerifyOptions = {}): Promise<SetupSta
       provider: info,
       credential: getCredentialStatus(providerId),
       reason: probe.reason,
-      message: probe.message ?? "A test message to Venice did not succeed.",
+      message: probe.message ?? `A test message to ${info.name} did not succeed.`,
     };
   }
 
   // 4. Derive capability defaults from the live catalog. Only now persist.
   const capabilities = detectAvailableCapabilities(models);
-  const routes = deriveCapabilityRoutes(models, providerId);
+  const routes = deriveCapabilityRoutes(models, providerId, options.selectedModels);
 
   if (candidateKey) {
     writeStoredCredential(providerId, candidateKey, { override: options.override });
