@@ -194,10 +194,10 @@ export async function runSetupCommand(sub: string, flags: string[]): Promise<num
  * Ensure setup is ready before starting the harness.
  */
 export async function ensureSetupForRun(options: { interactive: boolean }): Promise<boolean> {
-  if (listProviders().some((p) => isSetupReady(p.id))) return true;
+  if (isSetupReady()) return true;
 
   if (!options.interactive) {
-    const resolved = resolveCredential("surplus") ?? resolveCredential("venice");
+    const resolved = resolveCredential("venice") ?? resolveCredential("surplus");
     console.error(theme.red("Gondola is not set up yet."));
     if (!resolved) {
       console.error(theme.dim("Set SURPLUS_API_KEY or VENICE_API_KEY (see .env.example) or run `gondola setup` in an interactive terminal."));
