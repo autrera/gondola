@@ -21,6 +21,9 @@ interface RawVeniceModel {
     privacy?: string;
     description?: string;
     capabilities?: Record<string, boolean | number | string | string[]>;
+    constraints?: Record<string, unknown>;
+    pricing?: Record<string, unknown>;
+    traits?: string[];
     voices?: string[];
     default_voice?: string;
   };
