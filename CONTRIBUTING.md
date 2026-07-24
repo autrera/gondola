@@ -1,19 +1,19 @@
 # Contributing to Gondola
 
-Thanks for your interest in improving Gondola, a voice and vision AI companion and self-editing terminal harness powered by the [Venice AI](https://venice.ai) API and orchestrated by Pi Agent Core.
+Thanks for your interest in improving Gondola, a voice and vision AI companion and self-editing terminal harness powered by inference providers (Venice AI or Surplus Intelligence) and orchestrated by Pi Agent Core.
 
 This guide covers how to set up the project, the checks to run before opening a pull request, and the conventions we follow.
 
 ## Ground rules
 
-- **Venice is Gondola's default and only bundled full-capability provider in V1.** Future provider adapters may override individual capabilities, but they must preserve Gondola's privacy, safety, permissions, cancellation, observability, and evaluation guarantees. All provider-aware code must resolve through the provider registry and capability routes (`src/lib/providers/`), never ad-hoc provider conditionals.
+- **Venice is Gondola's default bundled full-capability provider; Surplus Intelligence is also bundled as an alternative.** All provider-aware code must resolve through the provider registry and capability routes (`src/lib/providers/`), never ad-hoc provider conditionals. Provider adapters must preserve Gondola's privacy, safety, permissions, cancellation, observability, and evaluation guarantees.
 - **Keep it local-first and private.** User data (conversations, memory, transcripts, vectors, keys) stays on the user's machine under `.gondola/` and `.env.local`. Never send it anywhere else, and never commit it.
 - **No secrets in the repo.** `.env.local`, `.gondola/`, and personal exports are git-ignored. Double-check `git status` before committing.
 
 ## Prerequisites
 
 - Node.js 20 or newer (the code relies on `AbortSignal.any`, `AbortSignal.timeout`, and `structuredClone`).
-- A Venice inference API key.
+- An inference API key (Venice AI or Surplus Intelligence).
 
 ## Local setup
 
@@ -21,10 +21,10 @@ This guide covers how to set up the project, the checks to run before opening a 
 git clone https://github.com/sabrinaaquino/gondola.git
 cd gondola
 npm install --ignore-scripts
-cp .env.example .env.local   # then add your VENICE_API_KEY
+cp .env.example .env.local   # then add your VENICE_API_KEY or SURPLUS_API_KEY
 ```
 
-First run launches a guided setup that verifies your Venice key and enables capabilities, so no manual `.env.local` is required. See [Setup and credentials](#setup-and-credentials).
+First run launches a guided setup that verifies your provider key and enables capabilities, so no manual `.env.local` is required. See [Setup and credentials](#setup-and-credentials).
 
 Run the web companion:
 
@@ -47,14 +47,14 @@ npm run harness
 
 ## Setup and credentials
 
-Gondola V1 uses **Venice** as its default, bundled, full-capability provider. Every V1 capability (conversation, reasoning, vision, search, transcription, speech, images, video, music, and embeddings) runs through Venice.
+Gondola supports **Venice AI** (default) and **Surplus Intelligence** as bundled full-capability providers. Every V1 capability (conversation, reasoning, vision, search, transcription, speech, images, video, music, and embeddings) runs through the configured provider.
 
-- **Consumer setup (recommended).** On first run Gondola shows a guided onboarding wizard (web) or `gondola setup` (terminal). It verifies your Venice key against the live model catalog, runs a minimal real completion, derives capability defaults from the catalog, and only then marks setup ready. The key is saved locally with owner-only permissions.
-- **Developer setup.** Export `VENICE_API_KEY` or put it in `.env.local` to skip the wizard. `VENICE_ADMIN_KEY` (optional) is used only for billing and usage endpoints.
-- **Credential precedence.** A deliberate local override wins; otherwise the environment variable (`VENICE_API_KEY`) wins; otherwise the local credential file. Removing the local credential falls back to the environment key when present.
+- **Consumer setup (recommended).** On first run Gondola shows a guided onboarding wizard (web) or `gondola setup` (terminal). It lets you select a provider, verifies your key against the live model catalog, runs a minimal real completion, derives capability defaults from the catalog, and only then marks setup ready. The key is saved locally with owner-only permissions.
+- **Developer setup.** Export `VENICE_API_KEY` or `SURPLUS_API_KEY` or put it in `.env.local` to skip the wizard. `VENICE_ADMIN_KEY` (optional) is used only for billing and usage endpoints.
+- **Credential precedence.** A deliberate local override wins; otherwise the environment variable wins; otherwise the local credential file. Removing the local credential falls back to the environment key when present.
 - **Where things are stored.** Secrets live in `~/.gondola/credentials.json` (file `0600`, directory `0700`) or the environment, never in the browser, chat history, traces, assets, Lab records, or logs. Non-secret verification state (timestamp, masked suffix, capability defaults) lives in `~/.gondola/setup.json`; web UI preferences stay in browser `localStorage`; runtime app state stays under the project `.gondola/`.
 - **Repair or reset.** Re-run `gondola setup`, `gondola doctor`, or Settings, Providers, Test connection to re-verify and refresh discovery without erasing anything. `gondola setup --reset` clears the local credential and verification after confirmation.
-- **Capabilities and providers.** Every V1 capability requires Venice. Future providers will be capability-specific overrides resolved through the provider registry (`src/lib/providers/`) and capability routes, not an all-or-nothing switch.
+- **Capabilities and providers.** Every V1 capability requires a configured provider. Providers are resolved through the provider registry (`src/lib/providers/`) and capability routes.
 
 ## Before you open a pull request
 
@@ -72,8 +72,8 @@ If you changed UI, do a quick manual pass in `npm run dev`. If you touched the h
 | Path | What lives there |
 | --- | --- |
 | `src/app/` | Next.js web companion (UI, API routes, streaming) |
-| `src/cli/` | Terminal harness (`main.ts`, REPL, coding and Venice tools) |
-| `src/lib/` | Shared core: Venice client, memory, model/stream setup, skills, MCP, sub-agents, search, compaction |
+| `src/cli/` | Terminal harness (`main.ts`, REPL, coding and provider tools) |
+| `src/lib/` | Shared core: inference client, memory, model/stream setup, skills, MCP, sub-agents, search, compaction |
 | `src/components/` | React components for the web UI |
 | `bin/nova.mjs` | Entry point for the `nova` command |
 | `public/` | Static assets |

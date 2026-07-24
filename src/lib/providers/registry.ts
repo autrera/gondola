@@ -141,7 +141,7 @@ export function deriveCapabilityRoutes(
   return routes;
 }
 
-/** A fresh, Venice-only provider configuration (no routes until discovery runs). */
+/** A fresh default provider configuration with Venice as default (no routes until discovery runs). */
 export function defaultProviderConfiguration(): ProviderConfiguration {
   return {
     defaultProviderId: DEFAULT_PROVIDER_ID,
@@ -161,10 +161,10 @@ export interface ResolvedRoute {
 }
 
 /**
- * Resolve the runtime provider + base URL for a capability. V1 always resolves
- * to Venice, but the runtime reads its base URL (and, later, model/provider)
- * from here so a future capability-specific override is a real code path, not
- * just settings metadata. Falls back to the default provider when unrouted.
+ * Resolve the runtime provider + base URL for a capability. The runtime reads
+ * its base URL and model/provider from here so a capability-specific override
+ * is a real code path, not just settings metadata.
+ * Falls back to the default provider when unrouted.
  */
 export function resolveCapabilityRoute(capability: Capability, config?: ProviderConfiguration): ResolvedRoute {
   const route = config?.routes?.[capability];

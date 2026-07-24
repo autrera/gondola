@@ -7,13 +7,13 @@ import { resolveCredential } from "./credential-store";
 import { resolveCapabilityRoute } from "./providers/registry";
 import { getVeniceKey } from "./venice";
 
-// Shared description of a Venice model over the OpenAI-completions API shape and
-// the streaming function that talks to Venice. Used by both the primary agent
-// and delegated sub-agents so there is a single source of truth.
+// Shared description of an OpenAI-compatible model and the streaming function
+// that talks to the configured inference provider. Used by both the primary
+// agent and delegated sub-agents so there is a single source of truth.
 
 export function makeModel(id: string, opts?: { reasoning?: boolean; supportsReasoningEffort?: boolean; maxTokens?: number }): Model<"openai-completions"> {
-  // Resolve the provider + base URL through the capability registry instead of
-  // hardcoding Venice, so a future per-capability override is a real code path.
+  // Resolve the provider + base URL through the capability registry so a
+  // per-capability override is a real code path.
   const route = resolveCapabilityRoute("chat");
   return {
     id,
